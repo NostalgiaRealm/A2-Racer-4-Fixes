@@ -14,15 +14,15 @@ The game uses `spel.dat` as the executable module for the DirectDraw/Direct3D ra
 
 On a current graphics card the original game crashes as soon as a race starts: the screen goes black and the game hangs or closes. The game measures its texture memory by creating textures until the card refuses, and keeps them in a list with room for 1024. Any card with more than about 128 MB of video memory overflows that list. This is why the game used to need dgVoodoo with `VRAM` set to 128 MB or less.
 
-Since v1.0.4 the patcher and the pre-patched `spel.dat` files fix this. The dgVoodoo `VRAM` setting no longer matters, and the race also starts with plain Wine or D7VK.
+Since v1.0.4 the patcher fixes this. The dgVoodoo `VRAM` setting no longer matters, and the race also starts with plain Wine or D7VK.
 
-- Already using v1.0.3? Run the new patcher on your patched `spel.dat`, or replace it with the new pre-patched file. Your original 4:3 file stays in the `4x3_backup` folder.
+- Already using v1.0.3? Run the new patcher on your patched `spel.dat`. Your original 4:3 file stays in the `4x3_backup` folder.
 - Game versions 1.00 and 1.01 use an identical `spel.dat`, so both are supported.
 - The technical details are in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#patch-part-4-texture-memory-crash-fix).
 
 ## Recommended setup
 
-The patched `spel.dat` fixes the 3D widescreen rendering, use the pre-patched .dat files or use the automatic patcher called A2Racer4WidescreenPatcher.exe executable
+The patched `spel.dat` fixes the 3D widescreen rendering. Create it with the automatic patcher, `A2Racer4WidescreenPatcher.exe` (or the Linux version).
 The patched overlay `.ini` files fix the HUD layout.
 
 Using only one part of the fix is not recommended.
@@ -33,13 +33,7 @@ Using only one part of the fix is not recommended.
 
 The automatic patcher. Place it in the game folder next to `spel.dat`, run it, and enter your 16:9 resolution, for example `2560x1440`. It moves the original `spel.dat` to a `4x3_backup` folder and writes the patched `spel.dat`, including the crash fix. It refuses to patch an unknown `spel.dat` version.
 
-The Windows version needs Windows 10 or newer. On Windows 7, use the pre-patched files below.
-
-### `A2Racer4_spel_dat_16x9_common_resolutions`
-
-These are the fixed `spel.dat` files for use with a 16 by 9 resolution.
-
-To use it, back up the original game file and replace the original `spel.dat` with this patched file. Rename the patched file to `spel.dat` if needed.
+The Windows version needs Windows 10 or newer. On Windows 7, patch `spel.dat` by hand with the steps in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#manual-patching-on-windows), or run the patcher on another PC and copy the patched `spel.dat` over.
 
 ### `A2Racer4_DashboardFix`
 
@@ -53,7 +47,10 @@ overlay3.ini
 overlay4.ini
 overlay5.ini
 overlay6.ini
+overlay7.ini
 ```
+
+`overlay7.ini` is for the "Schaduw" extra car update. Install that update first, then copy the overlay files.
 
 Extract these files into the same folder where the original overlay `.ini` files are located. Back up the originals first.
 
@@ -273,19 +270,13 @@ This strongly suggests the game assigns finish-result positions dynamically at r
 
 1. Back up the original game files:
    - `spel.dat`
-   - `overlay0.ini` through `overlay6.ini`
+   - `overlay0.ini` through `overlay6.ini`, and `overlay7.ini` if you installed the "Schaduw" extra car update
 
-2. Copy the patched `spel.dat` into the game folder.
+2. Run the patcher in the game folder and enter your resolution. It writes the patched `spel.dat` and moves the original to the `4x3_backup` folder.
 
-3. Rename the patched file to:
+3. Copy the overlay `.ini` files into the game folder, replacing the originals. `overlay7.ini` is only needed with the "Schaduw" extra car update.
 
-```text
-spel.dat
-```
-
-4. Copy `overlay0.ini` through `overlay6.ini` into the game folder, replacing the originals.
-
-5. Start the racing part of the game normally.
+4. Start the racing part of the game normally.
 
 ## Notes
 

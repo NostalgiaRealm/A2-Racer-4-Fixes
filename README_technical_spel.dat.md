@@ -81,7 +81,7 @@ It contains three important changes:
 
 The third part is an empirical tuning specific to this game. A mathematically pure 16:9 conversion would suggest a 4:3-to-16:9 factor of `1.333...`, but in this game that was not the best result. Testing showed that `1.25` produced the correct-looking 3D image without visible stretching.
 
-Since v1.0.4 the patcher and the pre-patched files also contain a fourth change that is not widescreen related: a fix for the crash at race start on graphics cards with more than ~128 MB of video memory. See [Patch part 4](#patch-part-4-texture-memory-crash-fix).
+Since v1.0.4 the patcher also applies a fourth change that is not widescreen related: a fix for the crash at race start on graphics cards with more than ~128 MB of video memory. See [Patch part 4](#patch-part-4-texture-memory-crash-fix).
 
 ## Patch part 1: display-mode table
 
@@ -534,9 +534,10 @@ overlay3.ini
 overlay4.ini
 overlay5.ini
 overlay6.ini
+overlay7.ini
 ```
 
-paste them into the same directory as the game expects them.
+paste them into the same directory as the game expects them. `overlay7.ini` is only needed with the "Schaduw" extra car update.
 
 ## Manual patching on Linux
 
