@@ -3,21 +3,29 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"embed"
 	"encoding/binary"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
 )
 
 const (
-	patcherVersion = "1.0.4"
-	gameFileName   = "spel.dat"
-	backupDir      = "4x3_backup"
+	patcherVersion  = "1.0.5"
+	gameFileName    = "spel.dat"
+	backupDir       = "4x3_backup"
+	extraCarOverlay = "overlay7.ini"
 )
+
+// Patched HUD layout files (the dashboard fix), installed next to spel.dat.
+//
+//go:embed overlays/*.ini
+var overlayFiles embed.FS
 
 var widthOffsets = []int{
 	0x1B3798,
@@ -52,29 +60,142 @@ var heightOffsets = []int{
 func main() {
 	fmt.Println("A2 Racer 4 Widescreen Patcher v" + patcherVersion)
 	fmt.Println("--------------------------------")
-	fmt.Println("Run this patcher from the folder containing spel.dat.")
 	fmt.Println()
 
-	width, height, err := askResolution()
+	reader := bufio.NewReader(os.Stdin)
+
+	gameDir, err := askGameDir(reader)
 	if err != nil {
 		fmt.Println("Error:", err)
 		os.Exit(1)
 	}
 
-	if err := patchInPlace(width, height); err != nil {
+	width, height, err := askResolution(reader)
+	if err != nil {
+		fmt.Println("Error:", err)
+		os.Exit(1)
+	}
+
+	if err := patchInPlace(gameDir, width, height); err != nil {
 		fmt.Println()
 		fmt.Println("Patch failed:", err)
 		os.Exit(1)
 	}
 
 	fmt.Println()
-	fmt.Printf("Done. Created patched %s for %dx%d.\n", gameFileName, width, height)
+	fmt.Printf("Created patched %s for %dx%d.\n", gameFileName, width, height)
 	fmt.Println("The texture memory crash fix for modern graphics cards is included.")
-	fmt.Println("Original file was moved to the 4x3_backup folder.")
+	fmt.Println()
+
+	if err := installOverlays(gameDir); err != nil {
+		fmt.Println()
+		fmt.Println("Copying the HUD files failed:", err)
+		os.Exit(1)
+	}
+
+	fmt.Println()
+	fmt.Println("Done. Original files were moved to the " + backupDir + " folder in:")
+	fmt.Println("  " + gameDir)
 }
 
-func askResolution() (int, int, error) {
-	reader := bufio.NewReader(os.Stdin)
+// askGameDir asks for the game folder instead of assuming the current one,
+// because installations differ, especially in Wine prefixes on Linux.
+func askGameDir(reader *bufio.Reader) (string, error) {
+	current, err := os.Getwd()
+	if err != nil {
+		current = "."
+	}
+
+	fmt.Println("Enter the A2 Racer 4 game folder (the folder that contains spel.dat).")
+	fmt.Println("Press Enter to use the current folder:")
+	fmt.Println("  " + current)
+	fmt.Print("Game folder: ")
+
+	line, err := reader.ReadString('\n')
+	if err != nil && len(line) == 0 {
+		return "", err
+	}
+
+	dir := cleanPath(line)
+	if dir == "" {
+		dir = current
+	}
+
+	// Terminals on Linux often escape spaces and brackets when a folder is
+	// dragged in, e.g. Program\ Files\ \(x86\).
+	if _, err := os.Stat(dir); err != nil && runtime.GOOS != "windows" && strings.Contains(dir, `\`) {
+		dir = filepath.Clean(regexp.MustCompile(`\\(.)`).ReplaceAllString(dir, "$1"))
+	}
+
+	info, err := os.Stat(dir)
+	if err != nil || !info.IsDir() {
+		return "", fmt.Errorf("%s is not a folder", dir)
+	}
+
+	if _, found := findFile(dir, gameFileName); !found {
+		return "", fmt.Errorf("there is no %s in %s. Choose the A2 Racer 4 game folder", gameFileName, dir)
+	}
+
+	fmt.Println()
+	return dir, nil
+}
+
+// cleanPath accepts a folder the way people tend to enter it: surrounded by
+// quotes (drag and drop) or starting with ~ for the home folder.
+func cleanPath(input string) string {
+	path := strings.TrimSpace(input)
+
+	if len(path) >= 2 && (path[0] == '"' || path[0] == '\'') && path[len(path)-1] == path[0] {
+		path = path[1 : len(path)-1]
+	}
+
+	if path == "~" || strings.HasPrefix(path, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			path = filepath.Join(home, path[1:])
+		}
+	}
+
+	if path == "" {
+		return ""
+	}
+
+	return filepath.Clean(path)
+}
+
+// findFile looks up name in dir ignoring case, so SPEL.DAT is found as well
+// on case-sensitive Linux file systems.
+func findFile(dir string, name string) (string, bool) {
+	entries, err := os.ReadDir(dir)
+	if err == nil {
+		for _, entry := range entries {
+			if !entry.IsDir() && strings.EqualFold(entry.Name(), name) {
+				return filepath.Join(dir, entry.Name()), true
+			}
+		}
+	}
+
+	return filepath.Join(dir, name), false
+}
+
+// backupPathFor returns where an original file is moved to. An existing
+// backup is never overwritten, since it may hold the untouched 4:3 file.
+func backupPathFor(gameDir string, name string) (string, error) {
+	dir := filepath.Join(gameDir, backupDir)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return "", fmt.Errorf("could not create %s folder: %w", backupDir, err)
+	}
+
+	path := filepath.Join(dir, name)
+	if _, err := os.Stat(path); err == nil {
+		stamp := time.Now().Format("20060102_150405")
+		ext := filepath.Ext(name)
+		path = filepath.Join(dir, strings.TrimSuffix(name, ext)+"_"+stamp+ext)
+	}
+
+	return path, nil
+}
+
+func askResolution(reader *bufio.Reader) (int, int, error) {
 	fmt.Print("Enter desired 16:9 resolution, for example 2560x1440: ")
 
 	line, err := reader.ReadString('\n')
@@ -114,8 +235,8 @@ func askResolution() (int, int, error) {
 	return width, height, nil
 }
 
-func patchInPlace(width int, height int) error {
-	inputPath := filepath.Join(".", gameFileName)
+func patchInPlace(gameDir string, width int, height int) error {
+	inputPath, _ := findFile(gameDir, gameFileName)
 
 	data, err := os.ReadFile(inputPath)
 	if err != nil {
@@ -137,14 +258,9 @@ func patchInPlace(width int, height int) error {
 		return err
 	}
 
-	if err := os.MkdirAll(backupDir, 0755); err != nil {
-		return fmt.Errorf("could not create %s folder: %w", backupDir, err)
-	}
-
-	backupPath := filepath.Join(backupDir, gameFileName)
-	if _, err := os.Stat(backupPath); err == nil {
-		stamp := time.Now().Format("20060102_150405")
-		backupPath = filepath.Join(backupDir, "spel_"+stamp+".dat")
+	backupPath, err := backupPathFor(gameDir, filepath.Base(inputPath))
+	if err != nil {
+		return err
 	}
 
 	if err := os.Rename(inputPath, backupPath); err != nil {
@@ -155,6 +271,68 @@ func patchInPlace(width int, height int) error {
 		// Try to restore the original if writing fails.
 		_ = os.Rename(backupPath, inputPath)
 		return fmt.Errorf("could not write patched %s; original was restored if possible: %w", gameFileName, err)
+	}
+
+	return nil
+}
+
+// installOverlays copies the patched HUD overlay files into the game folder
+// and moves the files they replace to the backup folder. overlay7.ini comes
+// with the "Schaduw" extra car update, which would overwrite it again, so it
+// is only replaced when that update is already installed.
+func installOverlays(gameDir string) error {
+	entries, err := overlayFiles.ReadDir("overlays")
+	if err != nil {
+		return err
+	}
+
+	for _, entry := range entries {
+		name := entry.Name()
+
+		data, err := overlayFiles.ReadFile("overlays/" + name)
+		if err != nil {
+			return err
+		}
+
+		target, exists := findFile(gameDir, name)
+
+		if name == extraCarOverlay && !exists {
+			fmt.Printf("Skipped %s: the \"Schaduw\" extra car update is not installed.\n", name)
+			fmt.Println("  Install that update first, then run the patcher again.")
+			continue
+		}
+
+		backupPath := ""
+		if exists {
+			current, err := os.ReadFile(target)
+			if err != nil {
+				return fmt.Errorf("could not read %s: %w", target, err)
+			}
+
+			if bytes.Equal(current, data) {
+				fmt.Printf("%s is already up to date.\n", name)
+				continue
+			}
+
+			backupPath, err = backupPathFor(gameDir, filepath.Base(target))
+			if err != nil {
+				return err
+			}
+
+			if err := os.Rename(target, backupPath); err != nil {
+				return fmt.Errorf("could not move original %s to %s: %w", name, backupPath, err)
+			}
+		}
+
+		if err := os.WriteFile(target, data, 0644); err != nil {
+			// Try to restore the original if writing fails.
+			if backupPath != "" {
+				_ = os.Rename(backupPath, target)
+			}
+			return fmt.Errorf("could not write %s; original was restored if possible: %w", name, err)
+		}
+
+		fmt.Printf("Installed %s\n", name)
 	}
 
 	return nil

@@ -5,7 +5,7 @@ This package contains a native 16:9 widescreen fix for the PC version of **A2 Ra
 The fix has three parts:
 
 1. a patched `spel.dat` executable module that makes the 3D game render correctly at a 16:9 resolution without horizontal stretching, and that fixes the crash at race start on modern graphics cards;
-2. An automatic patcher called `A2Racer4WidescreenPatcher.exe` that runs from the games' folder.
+2. An automatic patcher called `A2Racer4WidescreenPatcher.exe` that patches `spel.dat` and installs the overlay files in the game folder you choose.
 3. patched `overlay*.ini` files that reposition and unstretch the in-game HUD for a 16:9 layout.
 
 The game uses `spel.dat` as the executable module for the DirectDraw/Direct3D racing portion of the game, even though the file extension is `.dat`.
@@ -16,13 +16,13 @@ On a current graphics card the original game crashes as soon as a race starts: t
 
 Since v1.0.4 the patcher fixes this. The dgVoodoo `VRAM` setting no longer matters, and the race also starts with plain Wine or D7VK.
 
-- Already using v1.0.3? Run the new patcher on your patched `spel.dat`. Your original 4:3 file stays in the `4x3_backup` folder.
+- Already using an older version? Run the new patcher on your game folder. Your original 4:3 files stay in the `4x3_backup` folder.
 - Game versions 1.00 and 1.01 use an identical `spel.dat`, so both are supported.
 - The technical details are in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#patch-part-4-texture-memory-crash-fix).
 
 ## Recommended setup
 
-The patched `spel.dat` fixes the 3D widescreen rendering. Create it with the automatic patcher, `A2Racer4WidescreenPatcher.exe` (or the Linux version).
+The patched `spel.dat` fixes the 3D widescreen rendering. Since v1.0.5 the automatic patcher, `A2Racer4WidescreenPatcher.exe` (or the Linux version), creates it and installs the patched overlay `.ini` files in one go.
 The patched overlay `.ini` files fix the HUD layout.
 
 Using only one part of the fix is not recommended.
@@ -31,7 +31,24 @@ Using only one part of the fix is not recommended.
 
 ### `A2Racer4WidescreenPatcher.exe` / `A2Racer4WidescreenPatcher_linux_x86_64`
 
-The automatic patcher. Place it in the game folder next to `spel.dat`, run it, and enter your 16:9 resolution, for example `2560x1440`. It moves the original `spel.dat` to a `4x3_backup` folder and writes the patched `spel.dat`, including the crash fix. It refuses to patch an unknown `spel.dat` version.
+The automatic patcher. Run it from anywhere and enter:
+
+1. the game folder, the folder that contains `spel.dat`. Press Enter if the patcher is already in that folder;
+2. your 16:9 resolution, for example `2560x1440`.
+
+It writes the patched `spel.dat` (including the crash fix) and copies the patched overlay `.ini` files into that folder. Every file it replaces is moved to a `4x3_backup` folder in the game folder; earlier backups are never overwritten. It refuses to patch an unknown `spel.dat` version.
+
+Game folders differ per installation, for example:
+
+```text
+Windows:            C:\Program Files (x86)\Davilex\A2 Racer 4
+Lutris:             ~/Games/a2-racer-4/drive_c/Program Files (x86)/Davilex/A2 Racer 4
+Default Wine prefix: ~/.wine/drive_c/Program Files (x86)/Davilex/A2 Racer 4
+```
+
+You can type or paste the path, or drag the folder into the window. Quotes, escaped spaces and `~` are fine.
+
+`overlay7.ini` is only installed when the "Schaduw" extra car update is present, because that update brings its own copy. Install the update first, then run the patcher.
 
 The Windows version needs Windows 10 or newer. On Windows 7, patch `spel.dat` by hand with the steps in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#manual-patching-on-windows), or run the patcher on another PC and copy the patched `spel.dat` over.
 
@@ -51,6 +68,8 @@ overlay7.ini
 ```
 
 `overlay7.ini` is for the "Schaduw" extra car update. Install that update first, then copy the overlay files.
+
+Since v1.0.5 the patcher installs these files for you. The zip is for installing them by hand, for example on Windows 7.
 
 Extract these files into the same folder where the original overlay `.ini` files are located. Back up the originals first.
 
@@ -268,15 +287,13 @@ This strongly suggests the game assigns finish-result positions dynamically at r
 
 ## Installation
 
-1. Back up the original game files:
-   - `spel.dat`
-   - `overlay0.ini` through `overlay6.ini`, and `overlay7.ini` if you installed the "Schaduw" extra car update
+1. If you use the "Schaduw" extra car update, install it first.
 
-2. Run the patcher in the game folder and enter your resolution. It writes the patched `spel.dat` and moves the original to the `4x3_backup` folder.
+2. Run the patcher, then enter the game folder and your 16:9 resolution. It writes the patched `spel.dat` and overlay `.ini` files, and moves the originals to the `4x3_backup` folder in the game folder.
 
-3. Copy the overlay `.ini` files into the game folder, replacing the originals. `overlay7.ini` is only needed with the "Schaduw" extra car update.
+3. Start the racing part of the game normally.
 
-4. Start the racing part of the game normally.
+To install by hand instead, for example on Windows 7: back up `spel.dat` and the overlay `.ini` files, patch `spel.dat` with the steps in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#manual-patching-on-windows), and copy the files from `A2Racer4_DashboardFix.zip` into the game folder.
 
 ## Notes
 
