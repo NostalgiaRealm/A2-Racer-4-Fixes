@@ -1,4 +1,4 @@
-# A2 Racer 4 Widescreen Fix
+# A2 Racer 4 Widescreen Fix + Modern GPU Crash Fix
 
 This package contains a native 16:9 widescreen fix for the PC version of **A2 Racer 4**.
 
