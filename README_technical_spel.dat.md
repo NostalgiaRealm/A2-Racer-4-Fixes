@@ -81,6 +81,8 @@ It contains three important changes:
 
 The third part is an empirical tuning specific to this game. A mathematically pure 16:9 conversion would suggest a 4:3-to-16:9 factor of `1.333...`, but in this game that was not the best result. Testing showed that `1.25` produced the correct-looking 3D image without visible stretching.
 
+Since v1.0.4 the patcher and the pre-patched files also contain a fourth change that is not widescreen related: a fix for the crash at race start on graphics cards with more than ~128 MB of video memory. See [Patch part 4](#patch-part-4-texture-memory-crash-fix).
+
 ## Patch part 1: display-mode table
 
 The original executable contains repeated display-mode entries such as:
@@ -284,6 +286,66 @@ Patched:
 C7 46 1C 00 00 20 40
 ```
 
+## Patch part 4: texture memory crash fix
+
+This part is not related to widescreen. It fixes a crash in the original game that happens on every PC with a modern graphics card, at any resolution.
+
+### The problem
+
+When the Direct3D device is created at race start, the game measures how much texture memory the card has. It creates 256×256 textures in local video memory (`DDSCAPS_TEXTURE | DDSCAPS_VIDEOMEMORY | DDSCAPS_LOCALVIDMEM`) until `CreateSurface` fails, then releases them again. The surface pointers are kept in a fixed array of 1024 entries on the stack, and nothing checks the count.
+
+At 16-bit colour every texture is 128 KB, so any card or driver that lets more than ~128 MB of video memory be allocated overruns the array. The overrun overwrites the return address and the exception handler records on the stack, and keeps going until it hits the top of the stack:
+
+```text
+EXCEPTION_ACCESS_VIOLATION at 0x004BC11A, writing 0x00370000 (top of the main thread's stack)
+```
+
+The broken exception handler chain then turns this into a stack overflow. You see a black screen when the race should start.
+
+This is why the game used to need dgVoodoo with `VRAM` set to 128 MB or less: with 256 MB it crashes at exactly the same address. Plain Wine reports the card's real VRAM, so it crashes too.
+
+The probe function, at VA `0x004BC0F0`:
+
+```asm
+004bc0f0: b8 00 10 00 00        mov    eax, 0x1000           ; 4 KB local array = 1024 pointers
+004bc0f5: e8 06 d3 09 00        call   0x559400              ; stack probe
+004bc0fa: 53                    push   ebx
+...
+004bc108: 68 00 01 00 00        push   0x100                 ; 256
+004bc10d: 68 00 01 00 00        push   0x100                 ; 256
+004bc112: e8 59 ff ff ff        call   0x4bc070              ; IDirectDraw::CreateSurface wrapper
+004bc11a: 89 06                 mov    dword ptr [esi], eax  ; store pointer, no bound check
+004bc11c: 85 c0                 test   eax, eax
+004bc11e: 74 13                 je     0x4bc133              ; only exit: CreateSurface failed
+...                                                          ; add (bpp/8) << 16 bytes, next entry
+004bc135: 89 9d a1 02 00 00     mov    dword ptr [ebp+0x2a1], ebx   ; store the measured amount
+```
+
+### The fix
+
+The function has a single result: the measured byte count it stores at `this+0x2A1`. The game uses that value in two places:
+- as the upper limit for its texture cache, as `min(custom_texture_memory, measured)`;
+- it writes it to `game.ini` as `available_texture_memory`.
+
+So the patch replaces the start of the function with "store 64 MB and return", and skips the probe entirely:
+
+```asm
+004bc0f0: c7 81 a1 02 00 00 00 00 00 04   mov dword ptr [ecx+0x2a1], 0x4000000   ; 64 MB
+004bc0fa: c3                              ret
+```
+
+| File offset | VA | Original | Patched |
+|---:|---:|---|---|
+| `0x0BC0F0` | `0x004BC0F0` | `B8 00 10 00 00 E8 06 D3 09 00 53` | `C7 81 A1 02 00 00 00 00 00 04 C3` |
+
+Both callers pass the object in `ecx` and ignore the return value. The texture cache is still sized by `custom_texture_memory` from `game.ini` (4 MB as shipped, 8 MB after the menu's Texture detail setting), which is far below 64 MB. With `DEBUGON=1` the game's own `debug.txt` confirms it:
+
+```text
+Available texture memory: 4000000   (Real texture memory: 67108864)
+```
+
+Game versions 1.00 and 1.01 ship an identical `spel.dat`, so the same bytes apply to both. None of the widescreen changes are near this offset.
+
 ## Manual patching on Windows
 
 ### Recommended tools
@@ -426,7 +488,29 @@ with:
 C7 46 1C 00 00 20 40
 ```
 
-### Step 7: save as `spel.dat`
+### Step 7: fix the texture memory crash
+
+At file offset:
+
+```text
+0x0BC0F0
+```
+
+replace:
+
+```text
+B8 00 10 00 00 E8 06 D3 09 00 53
+```
+
+with:
+
+```text
+C7 81 A1 02 00 00 00 00 00 04 C3
+```
+
+This step also works on its own, for example on an original 4:3 `spel.dat`.
+
+### Step 8: save as `spel.dat`
 
 Save the patched file and rename it to:
 
@@ -436,7 +520,7 @@ spel.dat
 
 Then place it in the game directory.
 
-### Step 8: install the overlay `.ini` files
+### Step 9: install the overlay `.ini` files
 
 The executable patch fixes the 3D rendering. It does not fully fix the HUD by itself.
 
@@ -619,6 +703,18 @@ if data[offset:offset + len(old)] != old and data[offset:offset + len(new)] != n
 
 data[offset:offset + len(new)] = new
 
+# Texture memory crash fix: skip the probe and report 64 MB.
+# mov eax, 0x1000 / call 0x00559400 / push ebx
+# -> mov dword ptr [ecx+0x2A1], 0x04000000 / ret
+old = bytes.fromhex("B8 00 10 00 00 E8 06 D3 09 00 53")
+new = bytes.fromhex("C7 81 A1 02 00 00 00 00 00 04 C3")
+offset = 0x0BC0F0
+
+if data[offset:offset + len(old)] != old and data[offset:offset + len(new)] != new:
+    raise RuntimeError("Unexpected bytes at texture memory probe. Wrong executable version?")
+
+data[offset:offset + len(new)] = new
+
 output_path.write_bytes(data)
 
 print(f"Patched {input_path} -> {output_path}")
@@ -650,6 +746,23 @@ objdump -D -Mintel \
 ```
 
 Check that the `fidiv` line points to `0x5973d0` and the clip constants are `0xbfa00000` and `0x40200000`.
+
+Check the crash fix as well:
+
+```bash
+objdump -D -Mintel \
+  --start-address=0x4bc0f0 \
+  --stop-address=0x4bc0fb \
+  spel_2560x1440.dat
+```
+
+It should show:
+
+```asm
+4bc0f0:  c7 81 a1 02 00 00 00   mov    DWORD PTR [ecx+0x2a1],0x4000000
+4bc0f7:  00 00 04
+4bc0fa:  c3                     ret
+```
 
 You can also verify the table values with Python:
 
@@ -725,6 +838,10 @@ Without the overlay fix, the HUD can look stretched or misplaced even when the 3
 Use the overlay files together with the patched executable.
 
 ## Troubleshooting
+
+### The screen goes black and the game crashes when a race starts
+
+That is the texture memory probe overflowing on a modern graphics card (more than ~128 MB of VRAM). Check that the bytes at `0x0BC0F0` are `C7 81 A1 02 00 00 00 00 00 04 C3`; see [Patch part 4](#patch-part-4-texture-memory-crash-fix).
 
 ### The game still opens in the old resolution
 

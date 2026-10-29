@@ -4,11 +4,21 @@ This package contains a native 16:9 widescreen fix for the PC version of **A2 Ra
 
 The fix has three parts:
 
-1. a patched `spel.dat` executable module that makes the 3D game render correctly at a 16:9 resolution without horizontal stretching;
+1. a patched `spel.dat` executable module that makes the 3D game render correctly at a 16:9 resolution without horizontal stretching, and that fixes the crash at race start on modern graphics cards;
 2. An automatic patcher called `A2Racer4WidescreenPatcher.exe` that runs from the games' folder.
 3. patched `overlay*.ini` files that reposition and unstretch the in-game HUD for a 16:9 layout.
 
 The game uses `spel.dat` as the executable module for the DirectDraw/Direct3D racing portion of the game, even though the file extension is `.dat`.
+
+## Crash fix for modern graphics cards (v1.0.4)
+
+On a current graphics card the original game crashes as soon as a race starts: the screen goes black and the game hangs or closes. The game measures its texture memory by creating textures until the card refuses, and keeps them in a list with room for 1024. Any card with more than about 128 MB of video memory overflows that list. This is why the game used to need dgVoodoo with `VRAM` set to 128 MB or less.
+
+Since v1.0.4 the patcher and the pre-patched `spel.dat` files fix this. The dgVoodoo `VRAM` setting no longer matters, and the race also starts with plain Wine or D7VK.
+
+- Already using v1.0.3? Run the new patcher on your patched `spel.dat`, or replace it with the new pre-patched file. Your original 4:3 file stays in the `4x3_backup` folder.
+- Game versions 1.00 and 1.01 use an identical `spel.dat`, so both are supported.
+- The technical details are in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#patch-part-4-texture-memory-crash-fix).
 
 ## Recommended setup
 
@@ -18,6 +28,12 @@ The patched overlay `.ini` files fix the HUD layout.
 Using only one part of the fix is not recommended.
 
 ## Files
+
+### `A2Racer4WidescreenPatcher.exe` / `A2Racer4WidescreenPatcher_linux_x86_64`
+
+The automatic patcher. Place it in the game folder next to `spel.dat`, run it, and enter your 16:9 resolution, for example `2560x1440`. It moves the original `spel.dat` to a `4x3_backup` folder and writes the patched `spel.dat`, including the crash fix. It refuses to patch an unknown `spel.dat` version.
+
+The Windows version needs Windows 10 or newer. On Windows 7, use the pre-patched files below.
 
 ### `A2Racer4_spel_dat_16x9_common_resolutions`
 
@@ -78,6 +94,10 @@ For the 2560×1440 patch, the aspect/projection calculation was adjusted around 
 This keeps the original 4:3 vertical framing while allowing the wider 2560-pixel output to show extra image on the sides.
 
 An additional horizontal tuning factor was applied after testing. Resulting in a proper 16:9 image, no visible 3D stretching, and acceptable HUD behavior when combined with the patched overlay files.
+
+### 3. Texture memory crash fix
+
+Not widescreen related: the game's texture memory test is skipped, and the game is told it has 64 MB. The game keeps sizing its texture cache from its own `custom_texture_memory` setting (4–8 MB by default, well below 64 MB); it just no longer crashes on cards with more than 128 MB. See [Crash fix for modern graphics cards](#crash-fix-for-modern-graphics-cards-v104).
 
 ## What the overlay `.ini` files do
 
@@ -275,3 +295,4 @@ spel.dat
 - Back up your original files before installing.
 - This project does not include original game assets beyond modified configuration/executable patch files.
 - All testing was done on Fedora Linux 44 running the game through Wine using DXVK and DgVoodoo in tandem.
+- The v1.0.4 crash fix was tested on Fedora Linux 44 with plain Wine 11.19, D7VK v2.4, and dgVoodoo 2.80 with `VRAM = 256` (which crashes without the fix). It hasn't been tested on Windows yet.

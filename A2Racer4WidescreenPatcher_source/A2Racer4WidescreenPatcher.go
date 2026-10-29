@@ -14,8 +14,9 @@ import (
 )
 
 const (
-	gameFileName = "spel.dat"
-	backupDir   = "4x3_backup"
+	patcherVersion = "1.0.4"
+	gameFileName   = "spel.dat"
+	backupDir      = "4x3_backup"
 )
 
 var widthOffsets = []int{
@@ -49,7 +50,7 @@ var heightOffsets = []int{
 }
 
 func main() {
-	fmt.Println("A2 Racer 4 Widescreen Patcher")
+	fmt.Println("A2 Racer 4 Widescreen Patcher v" + patcherVersion)
 	fmt.Println("--------------------------------")
 	fmt.Println("Run this patcher from the folder containing spel.dat.")
 	fmt.Println()
@@ -68,6 +69,7 @@ func main() {
 
 	fmt.Println()
 	fmt.Printf("Done. Created patched %s for %dx%d.\n", gameFileName, width, height)
+	fmt.Println("The texture memory crash fix for modern graphics cards is included.")
 	fmt.Println("Original file was moved to the 4x3_backup folder.")
 }
 
@@ -245,6 +247,22 @@ func applyWidescreenPatch(data []byte, width int, height int) error {
 		[]byte{0xC7, 0x46, 0x1C, 0x00, 0x00, 0x00, 0x40},
 		[]byte{0xC7, 0x46, 0x1C, 0x00, 0x00, 0x20, 0x40},
 		"horizontal clip width",
+	); err != nil {
+		return err
+	}
+
+	// Texture memory crash fix (not widescreen related):
+	// at race start the game measures texture memory by creating 256x256 video
+	// memory textures until CreateSurface fails, keeping them in a 1024-entry
+	// stack array. With more than ~128 MB of VRAM that array overflows and the
+	// game crashes. Skip the probe and report 64 MB instead; the game still uses
+	// min(custom_texture_memory, measured):
+	// mov eax, 0x1000 / call 0x00559400 / push ebx -> mov dword ptr [ecx+0x2A1], 0x04000000 / ret
+	if err := patchBytes(
+		0x0BC0F0,
+		[]byte{0xB8, 0x00, 0x10, 0x00, 0x00, 0xE8, 0x06, 0xD3, 0x09, 0x00, 0x53},
+		[]byte{0xC7, 0x81, 0xA1, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0xC3},
+		"texture memory probe",
 	); err != nil {
 		return err
 	}
