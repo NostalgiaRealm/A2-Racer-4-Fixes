@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	patcherVersion  = "1.0.5"
+	patcherVersion  = "1.0.6"
 	gameFileName    = "spel.dat"
 	backupDir       = "4x3_backup"
 	extraCarOverlay = "overlay7.ini"
@@ -58,28 +58,46 @@ var heightOffsets = []int{
 }
 
 func main() {
+	ok := run()
+	waitBeforeClosing()
+	if !ok {
+		os.Exit(1)
+	}
+}
+
+// run does the actual work. Every failure is reported, together with what it
+// means for the game files, so the patcher never fails silently.
+func run() bool {
 	fmt.Println("A2 Racer 4 Widescreen Patcher v" + patcherVersion)
 	fmt.Println("--------------------------------")
 	fmt.Println()
+
+	if err := checkAdmin(); err != nil {
+		fmt.Println("Error:", err)
+		fmt.Println("Nothing was changed.")
+		return false
+	}
 
 	reader := bufio.NewReader(os.Stdin)
 
 	gameDir, err := askGameDir(reader)
 	if err != nil {
 		fmt.Println("Error:", err)
-		os.Exit(1)
+		fmt.Println("Nothing was changed.")
+		return false
 	}
 
 	width, height, err := askResolution(reader)
 	if err != nil {
 		fmt.Println("Error:", err)
-		os.Exit(1)
+		fmt.Println("Nothing was changed.")
+		return false
 	}
 
 	if err := patchInPlace(gameDir, width, height); err != nil {
 		fmt.Println()
 		fmt.Println("Patch failed:", err)
-		os.Exit(1)
+		return false
 	}
 
 	fmt.Println()
@@ -90,25 +108,37 @@ func main() {
 	if err := installOverlays(gameDir); err != nil {
 		fmt.Println()
 		fmt.Println("Copying the HUD files failed:", err)
-		os.Exit(1)
+		fmt.Println(gameFileName + " is patched, but not every HUD file was installed.")
+		fmt.Println("Fix the problem and run the patcher again.")
+		return false
 	}
 
 	fmt.Println()
 	fmt.Println("Done. Original files were moved to the " + backupDir + " folder in:")
 	fmt.Println("  " + gameDir)
+	return true
+}
+
+// waitBeforeClosing keeps a console window that closes together with the
+// patcher open, so the result can always be read.
+func waitBeforeClosing() {
+	if !consoleWillClose() {
+		return
+	}
+
+	fmt.Println()
+	fmt.Print("Press Enter to close.")
+	_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
 }
 
 // askGameDir asks for the game folder instead of assuming the current one,
 // because installations differ, especially in Wine prefixes on Linux.
 func askGameDir(reader *bufio.Reader) (string, error) {
-	current, err := os.Getwd()
-	if err != nil {
-		current = "."
-	}
+	suggested := defaultGameDir()
 
 	fmt.Println("Enter the A2 Racer 4 game folder (the folder that contains spel.dat).")
-	fmt.Println("Press Enter to use the current folder:")
-	fmt.Println("  " + current)
+	fmt.Println("Press Enter to use this folder:")
+	fmt.Println("  " + suggested)
 	fmt.Print("Game folder: ")
 
 	line, err := reader.ReadString('\n')
@@ -118,7 +148,7 @@ func askGameDir(reader *bufio.Reader) (string, error) {
 
 	dir := cleanPath(line)
 	if dir == "" {
-		dir = current
+		dir = suggested
 	}
 
 	// Terminals on Linux often escape spaces and brackets when a folder is
@@ -138,6 +168,55 @@ func askGameDir(reader *bufio.Reader) (string, error) {
 
 	fmt.Println()
 	return dir, nil
+}
+
+// defaultGameDir suggests the folder the patcher itself is in when spel.dat is
+// there, since Windows does not always start programs that need administrator
+// rights in their own folder. Otherwise it falls back to the current folder.
+func defaultGameDir() string {
+	var candidates []string
+
+	if exe, err := os.Executable(); err == nil {
+		if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+			exe = resolved
+		}
+		candidates = append(candidates, filepath.Dir(exe))
+	}
+
+	if current, err := os.Getwd(); err == nil {
+		candidates = append(candidates, current)
+	}
+
+	for _, dir := range candidates {
+		if _, found := findFile(dir, gameFileName); found {
+			return dir
+		}
+	}
+
+	if len(candidates) > 0 {
+		return candidates[len(candidates)-1]
+	}
+
+	return "."
+}
+
+// writeVerified writes data and reads it back, so a write that silently did
+// not happen, for example because a virus scanner undid it, is reported.
+func writeVerified(path string, data []byte) error {
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		return err
+	}
+
+	written, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("could not read %s back after writing: %w", path, err)
+	}
+
+	if !bytes.Equal(written, data) {
+		return fmt.Errorf("%s does not contain the patched data after writing", path)
+	}
+
+	return nil
 }
 
 // cleanPath accepts a folder the way people tend to enter it: surrounded by
@@ -238,39 +317,46 @@ func askResolution(reader *bufio.Reader) (int, int, error) {
 func patchInPlace(gameDir string, width int, height int) error {
 	inputPath, _ := findFile(gameDir, gameFileName)
 
+	// Everything up to moving the original happens before spel.dat is touched.
+	unchanged := func(err error) error {
+		return fmt.Errorf("%w. Nothing was changed", err)
+	}
+
 	data, err := os.ReadFile(inputPath)
 	if err != nil {
-		return fmt.Errorf("could not read %s: %w", gameFileName, err)
+		return unchanged(fmt.Errorf("could not read %s: %w", gameFileName, err))
 	}
 
 	if len(data) < 0x1B3932 {
-		return fmt.Errorf("%s is smaller than expected; wrong file?", gameFileName)
+		return unchanged(fmt.Errorf("%s is smaller than expected; wrong file?", gameFileName))
 	}
 
 	if len(data) < 2 || data[0] != 'M' || data[1] != 'Z' {
-		return fmt.Errorf("%s does not look like a Windows PE executable", gameFileName)
+		return unchanged(fmt.Errorf("%s does not look like a Windows PE executable", gameFileName))
 	}
 
 	patched := make([]byte, len(data))
 	copy(patched, data)
 
 	if err := applyWidescreenPatch(patched, width, height); err != nil {
-		return err
+		return unchanged(err)
 	}
 
 	backupPath, err := backupPathFor(gameDir, filepath.Base(inputPath))
 	if err != nil {
-		return err
+		return unchanged(err)
 	}
 
 	if err := os.Rename(inputPath, backupPath); err != nil {
-		return fmt.Errorf("could not move original %s to %s: %w", gameFileName, backupPath, err)
+		return unchanged(fmt.Errorf("could not move original %s to %s: %w", gameFileName, backupPath, err))
 	}
 
-	if err := os.WriteFile(inputPath, patched, 0644); err != nil {
+	if err := writeVerified(inputPath, patched); err != nil {
 		// Try to restore the original if writing fails.
-		_ = os.Rename(backupPath, inputPath)
-		return fmt.Errorf("could not write patched %s; original was restored if possible: %w", gameFileName, err)
+		if restoreErr := os.Rename(backupPath, inputPath); restoreErr != nil {
+			return fmt.Errorf("could not write patched %s: %w. The original is still in %s", gameFileName, err, backupPath)
+		}
+		return fmt.Errorf("could not write patched %s: %w. The original %s was put back", gameFileName, err, gameFileName)
 	}
 
 	return nil
@@ -324,12 +410,14 @@ func installOverlays(gameDir string) error {
 			}
 		}
 
-		if err := os.WriteFile(target, data, 0644); err != nil {
+		if err := writeVerified(target, data); err != nil {
 			// Try to restore the original if writing fails.
 			if backupPath != "" {
-				_ = os.Rename(backupPath, target)
+				if restoreErr := os.Rename(backupPath, target); restoreErr != nil {
+					return fmt.Errorf("could not write %s: %w. The original is still in %s", name, err, backupPath)
+				}
 			}
-			return fmt.Errorf("could not write %s; original was restored if possible: %w", name, err)
+			return fmt.Errorf("could not write %s: %w", name, err)
 		}
 
 		fmt.Printf("Installed %s\n", name)

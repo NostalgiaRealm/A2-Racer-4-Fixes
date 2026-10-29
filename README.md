@@ -38,6 +38,10 @@ The automatic patcher. Run it from anywhere and enter:
 
 It writes the patched `spel.dat` (including the crash fix) and copies the patched overlay `.ini` files into that folder. Every file it replaces is moved to a `4x3_backup` folder in the game folder; earlier backups are never overwritten. It refuses to patch an unknown `spel.dat` version.
 
+On Windows the patcher needs administrator rights, because the game is normally installed in `C:\Program Files (x86)`. Windows asks for them when you start it; click Yes. Without them it stops and changes nothing.
+
+The patcher always shows the result. That includes any file it could not write and what that means for your game files. The window stays open until you press Enter.
+
 Game folders differ per installation, for example:
 
 ```text
@@ -289,7 +293,7 @@ This strongly suggests the game assigns finish-result positions dynamically at r
 
 1. If you use the "Schaduw" extra car update, install it first.
 
-2. Run the patcher, then enter the game folder and your 16:9 resolution. It writes the patched `spel.dat` and overlay `.ini` files, and moves the originals to the `4x3_backup` folder in the game folder.
+2. Run the patcher (on Windows, click Yes when it asks for administrator rights), then enter the game folder and your 16:9 resolution. It writes the patched `spel.dat` and overlay `.ini` files, and moves the originals to the `4x3_backup` folder in the game folder.
 
 3. Start the racing part of the game normally.
 
