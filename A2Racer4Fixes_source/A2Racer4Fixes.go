@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	patcherVersion  = "1.1.0"
+	patcherVersion  = "1.1.1"
 	gameFileName    = "spel.dat"
 	backupDir       = "4x3_backup"
 	extraCarOverlay = "overlay7.ini"
@@ -68,7 +68,7 @@ func main() {
 // run does the actual work. Every failure is reported, together with what it
 // means for the game files, so the patcher never fails silently.
 func run() bool {
-	fmt.Println("A2 Racer 4 Widescreen Patcher v" + patcherVersion)
+	fmt.Println("A2 Racer 4 Fixes v" + patcherVersion)
 	fmt.Println("--------------------------------")
 	fmt.Println()
 
@@ -348,7 +348,7 @@ func patchInPlace(gameDir string, width int, height int) error {
 	patched := make([]byte, len(data))
 	copy(patched, data)
 
-	if err := applyWidescreenPatch(patched, width, height); err != nil {
+	if err := applyPatch(patched, width, height); err != nil {
 		return unchanged(err)
 	}
 
@@ -666,7 +666,7 @@ func floatBits(numerator uint32, denominator uint32) uint32 {
 	return exponent<<23 | (mantissa & 0x7FFFFF)
 }
 
-func applyWidescreenPatch(data []byte, width int, height int) error {
+func applyPatch(data []byte, width int, height int) error {
 	putU16 := func(offset int, value uint16) error {
 		if offset < 0 || offset+2 > len(data) {
 			return fmt.Errorf("offset 0x%X is outside the file", offset)
@@ -783,7 +783,7 @@ func applyWidescreenPatch(data []byte, width int, height int) error {
 		}
 	}
 
-	// Texture memory crash fix (not widescreen related):
+	// Texture memory crash fix (not related to the resolution):
 	// at race start the game measures texture memory by creating 256x256 video
 	// memory textures until CreateSurface fails, keeping them in a 1024-entry
 	// stack array. With more than ~128 MB of VRAM that array overflows and the

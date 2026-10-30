@@ -1,6 +1,6 @@
-# A2Racer4WidescreenPatcher source
+# A2Racer4Fixes source
 
-This folder contains the source code for the patcher, `A2Racer4WidescreenPatcher`. The 64-bit Windows and both Linux versions are written in Go. Build the whole folder (`.`), not a single `.go` file:
+This folder contains the source code for the patcher, `A2Racer4Fixes`. The 64-bit Windows and both Linux versions are written in Go. Build the whole folder (`.`), not a single `.go` file:
 - `admin_windows.go` and `admin_other.go` hold the platform-specific parts;
 - `rsrc_windows_amd64.syso` adds the Windows manifest that asks for administrator rights;
 - `win32/` holds the separate C version for 32-bit Windows, which covers the systems current Go cannot target.
@@ -10,39 +10,39 @@ This folder contains the source code for the patcher, `A2Racer4WidescreenPatcher
 Install Go, then run:
 
 ```cmd
-go build -trimpath -ldflags="-s -w" -o A2Racer4WidescreenPatcher.exe .
+go build -trimpath -ldflags="-s -w" -o A2Racer4Fixes.exe .
 ```
 
 ## Cross-compile from Linux
 
 ```bash
-GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o A2Racer4WidescreenPatcher.exe .
+GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o A2Racer4Fixes.exe .
 ```
 ## Compile a native Linux version
 ```bash
-GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o A2Racer4WidescreenPatcher_linux_x86_64 .
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o A2Racer4Fixes_linux_x86_64 .
 ```
 
 ## Compile the 32-bit Linux version
 
 ```bash
-GOOS=linux GOARCH=386 GO386=softfloat CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o A2Racer4WidescreenPatcher_linux_32bit .
+GOOS=linux GOARCH=386 GO386=softfloat CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o A2Racer4Fixes_linux_32bit .
 ```
 
 `GO386=softfloat` means this version needs MMX but not SSE2, so it also runs on older 32-bit processors. Current Go versions build Linux binaries that need Linux 3.2 or newer, and Windows binaries that need Windows 10 or newer.
 
 ## Compile the 32-bit Windows version
 
-Current Go versions don't run on anything older than Windows 10, and Go has never supported Windows 9x, so `win32/A2Racer4WidescreenPatcher_32bit.c` is a separate program with the same patches and messages. It imports only functions that exist since Windows 95, looks up anything newer at runtime, and uses no C runtime. Any change to the patcher has to go into both versions, and their output has to be compared before a release.
+Current Go versions don't run on anything older than Windows 10, and Go has never supported Windows 9x, so `win32/A2Racer4Fixes_32bit.c` is a separate program with the same patches and messages. It imports only functions that exist since Windows 95, looks up anything newer at runtime, and uses no C runtime. Any change to the patcher has to go into both versions, and their output has to be compared before a release.
 
 Build it in the `win32` folder with llvm-mingw. Release binaries use llvm-mingw 20261006:
 
 ```bash
-i686-w64-mingw32-windres A2Racer4WidescreenPatcher_32bit.rc -O coff -o resources.o
+i686-w64-mingw32-windres A2Racer4Fixes_32bit.rc -O coff -o resources.o
 ```
 
 ```bash
-i686-w64-mingw32-clang -march=i486 -Os -nostdlib -ffreestanding -fno-builtin -fno-stack-protector -fno-asynchronous-unwind-tables -mno-stack-arg-probe A2Racer4WidescreenPatcher_32bit.c resources.o -o A2Racer4WidescreenPatcher_32bit.exe -lkernel32 -luser32 -s -Wl,-e,_start@0 -Wl,--subsystem,console:4.0 -Wl,--major-os-version=4 -Wl,--minor-os-version=0 -Wl,--disable-dynamicbase -Wl,--disable-nxcompat -Wl,--disable-tsaware -Wl,--no-insert-timestamp
+i686-w64-mingw32-clang -march=i486 -Os -nostdlib -ffreestanding -fno-builtin -fno-stack-protector -fno-asynchronous-unwind-tables -mno-stack-arg-probe A2Racer4Fixes_32bit.c resources.o -o A2Racer4Fixes_32bit.exe -lkernel32 -luser32 -s -Wl,-e,_start@0 -Wl,--subsystem,console:4.0 -Wl,--major-os-version=4 -Wl,--minor-os-version=0 -Wl,--disable-dynamicbase -Wl,--disable-nxcompat -Wl,--disable-tsaware -Wl,--no-insert-timestamp
 ```
 
 ## Reproducing release binaries
@@ -51,15 +51,15 @@ Release binaries are built from a clean git checkout of the tagged commit. The G
 
 ## Windows manifest
 
-`A2Racer4WidescreenPatcher.exe.manifest` (64-bit) and `win32/A2Racer4WidescreenPatcher_32bit.exe.manifest` (32-bit) set `requireAdministrator`, so Windows Vista and newer ask for administrator rights before the patcher starts. The 32-bit one says `x86` and also lists Windows Vista, 7, 8 and 8.1 as supported. Older Windows ignores the request, so on Windows XP the patcher's own check is what stops a user without administrator rights. `rsrc_windows_amd64.syso` is the 64-bit manifest compiled as a resource; Go links it into 64-bit Windows builds automatically. After changing it, regenerate it with MinGW's `windres`:
+`A2Racer4Fixes.exe.manifest` (64-bit) and `win32/A2Racer4Fixes_32bit.exe.manifest` (32-bit) set `requireAdministrator`, so Windows Vista and newer ask for administrator rights before the patcher starts. The 32-bit one says `x86` and also lists Windows Vista, 7, 8 and 8.1 as supported. Older Windows ignores the request, so on Windows XP the patcher's own check is what stops a user without administrator rights. `rsrc_windows_amd64.syso` is the 64-bit manifest compiled as a resource; Go links it into 64-bit Windows builds automatically. After changing it, regenerate it with MinGW's `windres`:
 
 ```bash
-x86_64-w64-mingw32-windres -O coff -i A2Racer4WidescreenPatcher.rc -o rsrc_windows_amd64.syso
+x86_64-w64-mingw32-windres -O coff -i A2Racer4Fixes.rc -o rsrc_windows_amd64.syso
 ```
 
 ## Usage
 
-Run `A2Racer4WidescreenPatcher` from anywhere. It asks for:
+Run `A2Racer4Fixes` from anywhere. It asks for:
 - the A2 Racer 4 game folder, the one with `spel.dat`. Press Enter for the suggested folder: the patcher's own folder when `spel.dat` is there, otherwise the current folder;
 - a resolution such as:
 

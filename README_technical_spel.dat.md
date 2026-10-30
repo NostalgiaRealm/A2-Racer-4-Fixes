@@ -1,4 +1,4 @@
-# Technical notes: A2 Racer 4 `spel.dat` resolution patch
+# Technical notes: the A2 Racer 4 `spel.dat` patch
 
 This document explains how `spel.dat` is modified so **A2 Racer 4** renders correctly at any resolution. Everything depends only on the chosen width `W` and height `H`. The examples use 2560×1440.
 
@@ -216,7 +216,7 @@ The values are written as 32-bit floats. At 4:3 this gives the original `-1.0` a
 
 ## Patch part 4: texture memory crash fix
 
-This part is not related to widescreen. It fixes a crash in the original game that happens on every PC with a modern graphics card, at any resolution.
+This part is not related to the resolution. It fixes a crash in the original game that happens on every PC with a modern graphics card, at any resolution.
 
 ### The problem
 
@@ -272,7 +272,7 @@ Both callers pass the object in `ecx` and ignore the return value. The texture c
 Available texture memory: 4000000   (Real texture memory: 67108864)
 ```
 
-Game versions 1.00 and 1.01 ship an identical `spel.dat`, so the same bytes apply to both. None of the widescreen changes are near this offset.
+Game versions 1.00 and 1.01 ship an identical `spel.dat`, so the same bytes apply to both. None of the resolution changes are near this offset.
 
 ## Patch part 5: HUD proportions
 
@@ -476,7 +476,7 @@ data = bytearray(input_path.read_bytes())
 if not (0 <= width <= 65535 and 0 <= height <= 65535):
     raise ValueError("Width and height must fit in an unsigned 16-bit value.")
 
-# For Hor+ widescreen, keep a 4:3 reference width for the chosen height.
+# For Hor+, keep a 4:3 reference width for the chosen height.
 aspect_denominator = round(height * 4 / 3)
 
 if not (0 <= aspect_denominator <= 65535):

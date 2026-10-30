@@ -1,11 +1,14 @@
-# A2 Racer 4 Widescreen Fix for Any Resolution + Modern GPU Crash Fix
+# A2 Racer 4 Fixes
 
-This package makes the PC version of **A2 Racer 4** run correctly at the resolution you choose, whatever its shape: 16:9, 16:10, 21:9, 32:9, 4:3 or 5:4.
+Fixes for the PC version of **A2 Racer 4**:
 
-The fix has three parts:
+- the game runs correctly at the resolution you choose, whatever its shape: 16:9, 16:10, 21:9, 32:9, 4:3 or 5:4;
+- the crash at race start on modern graphics cards is gone.
 
-1. a patched `spel.dat` executable module that makes the 3D game render correctly at your resolution without stretching, and that fixes the crash at race start on modern graphics cards;
-2. An automatic patcher called `A2Racer4WidescreenPatcher`, for 64-bit and 32-bit Windows and Linux, that patches `spel.dat` and installs the overlay files in the game folder you choose.
+They consist of three parts:
+
+1. a patched `spel.dat` executable module that makes the 3D game render correctly at your resolution without stretching, and that fixes the crash;
+2. an automatic patcher called `A2Racer4Fixes`, for 64-bit and 32-bit Windows and Linux, that patches `spel.dat` and installs the overlay files in the game folder you choose;
 3. `overlay*.ini` files that the patcher makes from the game's own files, with the HUD moved to the edges of your screen.
 
 The game uses `spel.dat` as the executable module for the DirectDraw/Direct3D racing portion of the game, even though the file extension is `.dat`.
@@ -22,35 +25,35 @@ Since v1.0.4 the patcher fixes this. The dgVoodoo `VRAM` setting no longer matte
 
 ## Recommended setup
 
-The patched `spel.dat` fixes the 3D widescreen rendering. Since v1.0.5 the automatic patcher, `A2Racer4WidescreenPatcher.exe` (or the 32-bit or Linux version), creates it and installs the patched overlay `.ini` files in one go.
+The patched `spel.dat` fixes the 3D rendering and the crash. Since v1.0.5 the automatic patcher, `A2Racer4Fixes.exe` (or the 32-bit or Linux version), creates it and installs the patched overlay `.ini` files in one go.
 The overlay `.ini` files put the HUD at the edges of your screen.
 
-Using only one part of the fix is not recommended.
+Using only one part is not recommended.
 
 ## Files
 
-### `A2Racer4WidescreenPatcher` (Windows and Linux, 64-bit and 32-bit)
+### `A2Racer4Fixes` (Windows and Linux, 64-bit and 32-bit)
 
 The automatic patcher. Download the version for your system:
 
 | System | Download |
 |---|---|
-| Windows 10 or 11, 64-bit | `A2Racer4WidescreenPatcher.exe` |
-| Windows 95, 98, Me, 2000, XP, Vista, 7, 8, 8.1 or 10, 32-bit | `A2Racer4WidescreenPatcher_32bit.exe` |
-| Windows XP, Vista, 7, 8 or 8.1, 64-bit | `A2Racer4WidescreenPatcher_32bit.exe` |
-| Linux, 64-bit | `A2Racer4WidescreenPatcher_linux_x86_64` |
-| Linux, 32-bit | `A2Racer4WidescreenPatcher_linux_32bit` |
+| Windows 10 or 11, 64-bit | `A2Racer4Fixes.exe` |
+| Windows 95, 98, Me, 2000, XP, Vista, 7, 8, 8.1 or 10, 32-bit | `A2Racer4Fixes_32bit.exe` |
+| Windows XP, Vista, 7, 8 or 8.1, 64-bit | `A2Racer4Fixes_32bit.exe` |
+| Linux, 64-bit | `A2Racer4Fixes_linux_x86_64` |
+| Linux, 32-bit | `A2Racer4Fixes_linux_32bit` |
 
 The 64-bit versions do not start on a 32-bit system. All four write exactly the same files.
 
 On Linux, use a Linux version, also when the game runs in Wine. Open a terminal, make the file executable and start it (the 64-bit file works the same way):
 
 ```bash
-chmod +x A2Racer4WidescreenPatcher_linux_32bit
+chmod +x A2Racer4Fixes_linux_32bit
 ```
 
 ```bash
-./A2Racer4WidescreenPatcher_linux_32bit
+./A2Racer4Fixes_linux_32bit
 ```
 
 Run it from anywhere and enter:
@@ -78,7 +81,7 @@ You can type or paste the path, with or without quotes. On Linux, `~` and escape
 
 `overlay7.ini` is only installed when the "Schaduw" extra car update is present, because that update brings its own copy. Install the update first, then run the patcher.
 
-`A2Racer4WidescreenPatcher.exe` needs Windows 10 or newer, so on older 64-bit Windows use the 32-bit version. On Windows XP that one needs Service Pack 3. Service Pack 2 is untested, and Microsoft documents that programs with a manifest like this one can make an unpatched SP2 restart, so update to SP3 first, or install hotfixes KB921337 and KB943232. It doesn't support game folders with characters outside your system's code page: it gives an error and changes nothing.
+`A2Racer4Fixes.exe` needs Windows 10 or newer, so on older 64-bit Windows use the 32-bit version. On Windows XP that one needs Service Pack 3. Service Pack 2 is untested, and Microsoft documents that programs with a manifest like this one can make an unpatched SP2 restart, so update to SP3 first, or install hotfixes KB921337 and KB943232. It doesn't support game folders with characters outside your system's code page: it gives an error and changes nothing.
 
 The game can only use a resolution your graphics driver offers, so on an old PC choose a mode that is listed in your display settings.
 
@@ -124,7 +127,7 @@ Because older versions of this fix tuned the files by hand, the patcher refuses 
 
 1. If you use the "Schaduw" extra car update, install it first.
 
-2. Run the patcher (on Windows, click Yes when it asks for administrator rights), then enter the game folder and your 16:9 resolution. It writes the patched `spel.dat` and overlay `.ini` files, and moves the originals to the `4x3_backup` folder in the game folder.
+2. Run the patcher (on Windows, click Yes when it asks for administrator rights), then enter the game folder and your resolution. It writes the patched `spel.dat` and overlay `.ini` files, and moves the originals to the `4x3_backup` folder in the game folder.
 
 3. Start the racing part of the game normally.
 

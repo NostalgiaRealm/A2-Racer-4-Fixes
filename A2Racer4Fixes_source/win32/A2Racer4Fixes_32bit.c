@@ -1,8 +1,8 @@
 /*
- * A2 Racer 4 Widescreen Patcher for 32-bit Windows, from Windows 95 through 10.
+ * A2 Racer 4 Fixes for 32-bit Windows, from Windows 95 through 10.
  *
  * Current Go versions only run on Windows 10 or newer, so this is a separate
- * native program. It has to do exactly what ../A2Racer4WidescreenPatcher.go does:
+ * native program. It has to do exactly what ../A2Racer4Fixes.go does:
  * keep the two in step, and compare the files both write before each release. It
  * imports only functions that exist since Windows 95, looks up anything newer at
  * runtime, and uses no C runtime.
@@ -11,7 +11,7 @@
  */
 #include <windows.h>
 
-#define PATCHER_VERSION "1.1.0"
+#define PATCHER_VERSION "1.1.1"
 #define GAME_FILE "spel.dat"
 #define BACKUP_DIR "4x3_backup"
 #define EXTRA_CAR_OVERLAY "overlay7.ini"
@@ -33,7 +33,7 @@ static const DWORD height_offsets[] = {
 	0x1B3890, 0x1B38A4, 0x1B38B8, 0x1B3908, 0x1B391C, 0x1B3930,
 };
 
-/* The code changes, see applyWidescreenPatch in the Go patcher for what each does. */
+/* The code changes, see applyPatch in the Go patcher for what each does. */
 static const struct {
 	DWORD offset;
 	const char *label;
@@ -492,7 +492,7 @@ static DWORD float_bits(DWORD numerator, DWORD denominator)
 static const unsigned char clip_x_opcode[] = {0xC7, 0x46, 0x14};
 static const unsigned char clip_width_opcode[] = {0xC7, 0x46, 0x1C};
 
-static BOOL apply_widescreen_patch(char *data, int width, int height)
+static BOOL apply_patch(char *data, int width, int height)
 {
 	unsigned int i;
 	int aspect_denominator;
@@ -566,7 +566,7 @@ static BOOL patch_in_place(int width, int height)
 		return unchanged();
 	}
 
-	if (!apply_widescreen_patch(data, width, height))
+	if (!apply_patch(data, width, height))
 		return unchanged();
 
 	if (!backup_path_for(base_name(input_path), backup_path))
@@ -1041,7 +1041,7 @@ static BOOL run(void)
 {
 	int width, height;
 
-	say("A2 Racer 4 Widescreen Patcher v" PATCHER_VERSION "\r\n");
+	say("A2 Racer 4 Fixes v" PATCHER_VERSION "\r\n");
 	say("--------------------------------\r\n\r\n");
 
 	if (!check_admin()) {
