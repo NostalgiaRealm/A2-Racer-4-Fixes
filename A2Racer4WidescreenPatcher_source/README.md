@@ -1,9 +1,9 @@
 # A2Racer4WidescreenPatcher source
 
-This folder contains the Go source code for `A2Racer4WidescreenPatcher.exe`. Build the whole folder (`.`), not a single `.go` file:
+This folder contains the Go source code for the patcher, `A2Racer4WidescreenPatcher`. Build the whole folder (`.`), not a single `.go` file:
 - the patched HUD files in `overlays/` are built in with `go:embed`;
 - `admin_windows.go` and `admin_other.go` hold the platform-specific parts;
-- `rsrc_windows_amd64.syso` adds the Windows manifest that asks for administrator rights.
+- `rsrc_windows_amd64.syso` and `rsrc_windows_386.syso` add the Windows manifest that asks for administrator rights.
 
 ## Build on Windows
 
@@ -13,6 +13,8 @@ Install Go, then run:
 go build -trimpath -ldflags="-s -w" -o A2Racer4WidescreenPatcher.exe .
 ```
 
+For the 32-bit version, run `set GOARCH=386` first and use `-o A2Racer4WidescreenPatcher_32bit.exe`.
+
 ## Cross-compile from Linux
 
 ```bash
@@ -20,17 +22,35 @@ GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o A
 ```
 ## Compile a native Linux version
 ```bash
-GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o A2Racer4WidescreenPatcher .
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o A2Racer4WidescreenPatcher_linux_x86_64 .
 ```
 
-Current Go versions build Windows binaries that need Windows 10 or newer.
+## Compile the 32-bit versions
+
+```bash
+GOOS=windows GOARCH=386 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o A2Racer4WidescreenPatcher_32bit.exe .
+```
+
+```bash
+GOOS=linux GOARCH=386 GO386=softfloat CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o A2Racer4WidescreenPatcher_linux_32bit .
+```
+
+`GO386=softfloat` means the Linux version needs MMX but not SSE2, so it also runs on older 32-bit processors. Windows 10 requires SSE2 itself, so the Windows version uses Go's default.
+
+Current Go versions build Windows binaries that need Windows 10 or newer, and Linux binaries that need Linux 3.2 or newer.
+
+Release binaries are built from a clean git checkout of the tagged commit with Fedora 44's Go 1.26.10 package (`go version` prints `go1.26.10-X:nodwarf5`). Go stamps the commit and whether the checkout is clean into the binary; `.gitignore` keeps the files built above from counting as changes. These steps give byte-identical files. Go 1.26.10 built from the upstream source does too, with `GOEXPERIMENT=nodwarf5` set.
 
 ## Windows manifest
 
-`A2Racer4WidescreenPatcher.exe.manifest` sets `requireAdministrator`, so Windows asks for administrator rights before the patcher starts. `rsrc_windows_amd64.syso` is that manifest compiled as a resource; Go links it into Windows builds automatically. After changing the manifest, regenerate it with MinGW's `windres` (for example from llvm-mingw):
+`A2Racer4WidescreenPatcher.exe.manifest` (64-bit) and `A2Racer4WidescreenPatcher_32bit.exe.manifest` (32-bit) set `requireAdministrator`, so Windows asks for administrator rights before the patcher starts. They differ only in `processorArchitecture`. `rsrc_windows_amd64.syso` and `rsrc_windows_386.syso` are those manifests compiled as resources; Go links the one for the target architecture into Windows builds automatically, so a Windows architecture without its own `.syso` would lose the administrator prompt. After changing a manifest, regenerate its resource with MinGW's `windres` (for example from llvm-mingw or binutils):
 
 ```bash
 x86_64-w64-mingw32-windres -O coff -i A2Racer4WidescreenPatcher.rc -o rsrc_windows_amd64.syso
+```
+
+```bash
+x86_64-w64-mingw32-windres -F pe-i386 -O coff -i A2Racer4WidescreenPatcher_32bit.rc -o rsrc_windows_386.syso
 ```
 
 ## Usage

@@ -5,7 +5,7 @@ This package contains a native 16:9 widescreen fix for the PC version of **A2 Ra
 The fix has three parts:
 
 1. a patched `spel.dat` executable module that makes the 3D game render correctly at a 16:9 resolution without horizontal stretching, and that fixes the crash at race start on modern graphics cards;
-2. An automatic patcher called `A2Racer4WidescreenPatcher.exe` that patches `spel.dat` and installs the overlay files in the game folder you choose.
+2. An automatic patcher called `A2Racer4WidescreenPatcher`, for 64-bit and 32-bit Windows and Linux, that patches `spel.dat` and installs the overlay files in the game folder you choose.
 3. patched `overlay*.ini` files that reposition and unstretch the in-game HUD for a 16:9 layout.
 
 The game uses `spel.dat` as the executable module for the DirectDraw/Direct3D racing portion of the game, even though the file extension is `.dat`.
@@ -22,39 +22,64 @@ Since v1.0.4 the patcher fixes this. The dgVoodoo `VRAM` setting no longer matte
 
 ## Recommended setup
 
-The patched `spel.dat` fixes the 3D widescreen rendering. Since v1.0.5 the automatic patcher, `A2Racer4WidescreenPatcher.exe` (or the Linux version), creates it and installs the patched overlay `.ini` files in one go.
+The patched `spel.dat` fixes the 3D widescreen rendering. Since v1.0.5 the automatic patcher, `A2Racer4WidescreenPatcher.exe` (or the 32-bit or Linux version), creates it and installs the patched overlay `.ini` files in one go.
 The patched overlay `.ini` files fix the HUD layout.
 
 Using only one part of the fix is not recommended.
 
 ## Files
 
-### `A2Racer4WidescreenPatcher.exe` / `A2Racer4WidescreenPatcher_linux_x86_64`
+### `A2Racer4WidescreenPatcher` (Windows and Linux, 64-bit and 32-bit)
 
-The automatic patcher. Run it from anywhere and enter:
+The automatic patcher. Download the version for your system (since v1.0.7 there are 32-bit versions too):
+
+| System | Download |
+|---|---|
+| Windows 10 or 11, 64-bit | `A2Racer4WidescreenPatcher.exe` |
+| Windows 10, 32-bit | `A2Racer4WidescreenPatcher_32bit.exe` |
+| Linux, 64-bit | `A2Racer4WidescreenPatcher_linux_x86_64` |
+| Linux, 32-bit | `A2Racer4WidescreenPatcher_linux_32bit` |
+
+The 64-bit versions do not start on a 32-bit system. All four write exactly the same files.
+
+On Linux, use a Linux version, also when the game runs in Wine. Open a terminal, make the file executable and start it (the 64-bit file works the same way):
+
+```bash
+chmod +x A2Racer4WidescreenPatcher_linux_32bit
+```
+
+```bash
+./A2Racer4WidescreenPatcher_linux_32bit
+```
+
+Run it from anywhere and enter:
 
 1. the game folder, the folder that contains `spel.dat`. Press Enter if the patcher is already in that folder;
 2. your 16:9 resolution, for example `2560x1440`.
 
 It writes the patched `spel.dat` (including the crash fix) and copies the patched overlay `.ini` files into that folder. Every file it replaces is moved to a `4x3_backup` folder in the game folder; earlier backups are never overwritten. It refuses to patch an unknown `spel.dat` version.
 
-On Windows the patcher needs administrator rights, because the game is normally installed in `C:\Program Files (x86)`. Windows asks for them when you start it; click Yes. Without them it stops and changes nothing.
+On Windows the patcher needs administrator rights, because the game is normally installed in `C:\Program Files (x86)`, or `C:\Program Files` on 32-bit Windows. Windows asks for them when you start it; click Yes. Without them it stops and changes nothing.
 
-The patcher always shows the result. That includes any file it could not write and what that means for your game files. The window stays open until you press Enter.
+The patcher always shows the result. That includes any file it could not write and what that means for your game files. On Windows the window stays open until you press Enter.
 
 Game folders differ per installation, for example:
 
 ```text
-Windows:            C:\Program Files (x86)\Davilex\A2 Racer 4
-Lutris:             ~/Games/a2-racer-4/drive_c/Program Files (x86)/Davilex/A2 Racer 4
+Windows:             C:\Program Files (x86)\Davilex\A2 Racer 4
+Windows 32-bit:      C:\Program Files\Davilex\A2 Racer 4
+Lutris:              ~/Games/a2-racer-4/drive_c/Program Files (x86)/Davilex/A2 Racer 4
 Default Wine prefix: ~/.wine/drive_c/Program Files (x86)/Davilex/A2 Racer 4
+32-bit Wine prefix:  ~/.wine/drive_c/Program Files/Davilex/A2 Racer 4
 ```
 
-You can type or paste the path, or drag the folder into the window. Quotes, escaped spaces and `~` are fine.
+You can type or paste the path, with or without quotes. On Linux, `~` and escaped spaces work too, and most terminals let you drag the folder in.
 
 `overlay7.ini` is only installed when the "Schaduw" extra car update is present, because that update brings its own copy. Install the update first, then run the patcher.
 
-The Windows version needs Windows 10 or newer. On Windows 7, patch `spel.dat` by hand with the steps in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#manual-patching-on-windows), or run the patcher on another PC and copy the patched `spel.dat` over.
+Both Windows versions need Windows 10 or newer. On anything older, 32-bit editions included, they do not start or they close immediately. There, patch `spel.dat` by hand with the steps in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#manual-patching-on-windows), or run the patcher on another PC and copy the patched `spel.dat` and overlay `.ini` files over.
+
+The 32-bit Linux version needs Linux 3.2 or newer and a processor with MMX. It does not need SSE2, so it also runs on a Pentium III or Athlon XP.
 
 ### `A2Racer4_DashboardFix`
 
@@ -317,3 +342,4 @@ Making the image requires the original disc. Tools such as ImgBurn (Windows) or 
 - This project does not include original game assets beyond modified configuration/executable patch files.
 - All testing was done on Fedora Linux 44 running the game through Wine using DXVK and DgVoodoo in tandem.
 - The v1.0.4 crash fix was tested on Fedora Linux 44 with plain Wine 11.19, D7VK v2.4, and dgVoodoo 2.80 with `VRAM = 256` (which crashes without the fix). It hasn't been tested on Windows yet.
+- The v1.0.7 32-bit patchers were tested on 64-bit Fedora Linux 44: the Linux version directly, the Windows version under Wine 11.20. They wrote the same files as the 64-bit patchers. The Linux version also ran on a 32-bit Linux 3.18 kernel in QEMU, on emulated Pentium III and Athlon processors without SSE2. They haven't been tested on a real 32-bit PC or on actual 32-bit Windows yet.

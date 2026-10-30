@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	patcherVersion  = "1.0.6"
+	patcherVersion  = "1.0.7"
 	gameFileName    = "spel.dat"
 	backupDir       = "4x3_backup"
 	extraCarOverlay = "overlay7.ini"
