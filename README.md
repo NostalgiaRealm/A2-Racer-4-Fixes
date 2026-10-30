@@ -1,12 +1,12 @@
-# A2 Racer 4 Widescreen Fix + Modern GPU Crash Fix
+# A2 Racer 4 Widescreen Fix for Any Resolution + Modern GPU Crash Fix
 
-This package contains a native 16:9 widescreen fix for the PC version of **A2 Racer 4**.
+This package makes the PC version of **A2 Racer 4** run correctly at the resolution you choose, whatever its shape: 16:9, 16:10, 21:9, 32:9, 4:3 or 5:4.
 
 The fix has three parts:
 
-1. a patched `spel.dat` executable module that makes the 3D game render correctly at a 16:9 resolution without horizontal stretching, and that fixes the crash at race start on modern graphics cards;
-2. An automatic patcher called `A2Racer4WidescreenPatcher`, for 64-bit and 32-bit Windows and Linux and for Windows 95, 98 and Me, that patches `spel.dat` and installs the overlay files in the game folder you choose.
-3. patched `overlay*.ini` files that reposition and unstretch the in-game HUD for a 16:9 layout.
+1. a patched `spel.dat` executable module that makes the 3D game render correctly at your resolution without stretching, and that fixes the crash at race start on modern graphics cards;
+2. An automatic patcher called `A2Racer4WidescreenPatcher`, for 64-bit and 32-bit Windows and Linux, that patches `spel.dat` and installs the overlay files in the game folder you choose.
+3. `overlay*.ini` files that the patcher makes from the game's own files, with the HUD moved to the edges of your screen.
 
 The game uses `spel.dat` as the executable module for the DirectDraw/Direct3D racing portion of the game, even though the file extension is `.dat`.
 
@@ -23,7 +23,7 @@ Since v1.0.4 the patcher fixes this. The dgVoodoo `VRAM` setting no longer matte
 ## Recommended setup
 
 The patched `spel.dat` fixes the 3D widescreen rendering. Since v1.0.5 the automatic patcher, `A2Racer4WidescreenPatcher.exe` (or the 32-bit or Linux version), creates it and installs the patched overlay `.ini` files in one go.
-The patched overlay `.ini` files fix the HUD layout.
+The overlay `.ini` files put the HUD at the edges of your screen.
 
 Using only one part of the fix is not recommended.
 
@@ -31,18 +31,17 @@ Using only one part of the fix is not recommended.
 
 ### `A2Racer4WidescreenPatcher` (Windows and Linux, 64-bit and 32-bit)
 
-The automatic patcher. Download the version for your system (since v1.0.8 the 32-bit Windows version also runs on Windows XP, Vista, 7, 8 and 8.1, and since v1.0.9 there is a version for Windows 95, 98 and Me):
+The automatic patcher. Download the version for your system:
 
 | System | Download |
 |---|---|
 | Windows 10 or 11, 64-bit | `A2Racer4WidescreenPatcher.exe` |
-| Windows XP, Vista, 7, 8, 8.1 or 10, 32-bit | `A2Racer4WidescreenPatcher_32bit.exe` |
+| Windows 95, 98, Me, 2000, XP, Vista, 7, 8, 8.1 or 10, 32-bit | `A2Racer4WidescreenPatcher_32bit.exe` |
 | Windows XP, Vista, 7, 8 or 8.1, 64-bit | `A2Racer4WidescreenPatcher_32bit.exe` |
-| Windows 95, 98 or Me | `A2Racer4WidescreenPatcher_win9x.exe` |
 | Linux, 64-bit | `A2Racer4WidescreenPatcher_linux_x86_64` |
 | Linux, 32-bit | `A2Racer4WidescreenPatcher_linux_32bit` |
 
-The 64-bit versions do not start on a 32-bit system. All five write exactly the same files.
+The 64-bit versions do not start on a 32-bit system. All four write exactly the same files.
 
 On Linux, use a Linux version, also when the game runs in Wine. Open a terminal, make the file executable and start it (the 64-bit file works the same way):
 
@@ -57,11 +56,11 @@ chmod +x A2Racer4WidescreenPatcher_linux_32bit
 Run it from anywhere and enter:
 
 1. the game folder, the folder that contains `spel.dat`. Press Enter if the patcher is already in that folder;
-2. your 16:9 resolution, for example `2560x1440`.
+2. your resolution, for example `2560x1440`.
 
 It writes the patched `spel.dat` (including the crash fix) and copies the patched overlay `.ini` files into that folder. Every file it replaces is moved to a `4x3_backup` folder in the game folder; earlier backups are never overwritten. It refuses to patch an unknown `spel.dat` version.
 
-On Windows the patcher needs administrator rights, because the game is normally installed in `C:\Program Files (x86)`, or `C:\Program Files` on 32-bit Windows. Windows asks for them when you start it; click Yes (Allow on Vista). Windows XP does not ask: use an administrator account, or right-click the patcher and choose Run as. Without administrator rights it stops and changes nothing.
+On Windows the patcher needs administrator rights, because the game is normally installed in `C:\Program Files (x86)`, or `C:\Program Files` on 32-bit Windows. Windows asks for them when you start it; click Yes (Allow on Vista). Windows XP does not ask: use an administrator account, or right-click the patcher and choose Run as. Without administrator rights it stops and changes nothing. Windows 95, 98 and Me have no such rights.
 
 The patcher always shows the result. That includes any file it could not write and what that means for your game files. On Windows the window stays open until you press Enter.
 
@@ -79,244 +78,47 @@ You can type or paste the path, with or without quotes. On Linux, `~` and escape
 
 `overlay7.ini` is only installed when the "Schaduw" extra car update is present, because that update brings its own copy. Install the update first, then run the patcher.
 
-`A2Racer4WidescreenPatcher.exe` needs Windows 10 or newer, so on older 64-bit Windows use the 32-bit version. That one needs Windows XP with Service Pack 3 or newer. Service Pack 2 is untested, and Microsoft documents that programs with a manifest like this one can make an unpatched SP2 restart, so update to SP3 first, or install hotfixes KB921337 and KB943232. On Windows 2000, patch `spel.dat` by hand with the steps in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#manual-patching-on-windows), or run the patcher on another PC and copy the patched `spel.dat` and overlay `.ini` files over.
+`A2Racer4WidescreenPatcher.exe` needs Windows 10 or newer, so on older 64-bit Windows use the 32-bit version. On Windows XP that one needs Service Pack 3. Service Pack 2 is untested, and Microsoft documents that programs with a manifest like this one can make an unpatched SP2 restart, so update to SP3 first, or install hotfixes KB921337 and KB943232. It doesn't support game folders with characters outside your system's code page: it gives an error and changes nothing.
 
-`A2Racer4WidescreenPatcher_win9x.exe` is only for Windows 95, 98 and Me, and refuses to run on newer Windows. Those systems have no administrator rights to ask for. The game can only use a resolution your graphics driver offers, so on an old PC choose a 16:9 mode that is listed in your display settings.
+The game can only use a resolution your graphics driver offers, so on an old PC choose a mode that is listed in your display settings.
 
-The two other 32-bit versions need a processor with MMX but not SSE2, so they also run on a Pentium III or Athlon XP. The 32-bit Linux version needs Linux 3.2 or newer.
+The 32-bit Windows version needs a 486 or newer. The 32-bit Linux version needs a processor with MMX but not SSE2, so it also runs on a Pentium III or Athlon XP, and Linux 3.2 or newer.
 
 ### `A2Racer4_DashboardFix`
 
-This contains the patched overlay files:
-
-```text
-overlay0.ini
-overlay1.ini
-overlay2.ini
-overlay3.ini
-overlay4.ini
-overlay5.ini
-overlay6.ini
-overlay7.ini
-```
-
-`overlay7.ini` is for the "Schaduw" extra car update. Install that update first, then copy the overlay files.
-
-Since v1.0.5 the patcher installs these files for you. The zip is for installing them by hand, for example on Windows 2000.
-
-Extract these files into the same folder where the original overlay `.ini` files are located. Back up the originals first.
+Ready-made overlay files for 16:9 screens only, for installing by hand. `overlay7.ini` is for the "Schaduw" extra car update. The patcher makes these files itself for any resolution, so normally you don't need the zip. Back up the originals first, then extract the files into the same folder.
 
 ## What the `spel.dat` patch changes
 
-The original game is built around 4:3 display modes such as 640×480 and 800×600. Simply forcing a 16:9 resolution makes the 3D image either stretched or vertically zoomed.
+The original game is built around 4:3 display modes. Forcing another shape makes the image stretched or zoomed. The patch does the following, all calculated from your resolution. The details and the code behind them are in [`README_technical_spel.dat.md`](README_technical_spel.dat.md).
 
-The patched `spel.dat` fixes this in two steps:
+1. **Display mode:** the game's mode table is set to your resolution.
+2. **3D view:** the vertical view stays as it is at 4:3, and the horizontal view is set to `0.75 x width / height`. Pixels stay square at every shape. A wider screen shows more on the sides, and a narrower one such as 5:4 shows slightly less.
+3. **HUD proportions:** the game squashes its HUD vertically on anything but 4:3. The patch makes it use the 4:3 shape there too, so the HUD keeps its original proportions and its size relative to the height of the screen.
+4. **Texture memory crash fix:** not related to the screen shape, see [Crash fix for modern graphics cards](#crash-fix-for-modern-graphics-cards-v104).
 
-### 1. Native 16:9 display mode
+## What happens to the overlay `.ini` files
 
-The internal display-mode table was changed so the game can open a **16 by 9** mode instead of falling back to old 4:3 modes.
-
-For the 2560×1440 build, for example, the relevant mode-table entries are redirected to:
-
-```text
-Width  = 2560
-Height = 1440
-```
-
-### 2. Hor+ 3D projection correction
-
-The 3D viewport/projection math was adjusted so the game keeps the correct proportions at 16:9.
-
-The important part is that the patch does **not** just stretch the old 4:3 image. Instead, it preserves the vertical framing and expands the visible horizontal view. This is the desired **Hor+** widescreen behavior:
+The overlay files describe the HUD on a 640x480 canvas. The patcher starts from the game's own files, from `4x3_backup` after an earlier run, so results never build on an earlier patch. It only moves elements attached to a screen edge, by the same amount everywhere:
 
 ```text
-Original 4:3:   normal vertical view, limited horizontal view
-Patched 16:9:   same vertical view, more horizontal view
+shift = (0.75 x width / height - 1) x 320 / 0.99, rounded
 ```
 
-For the 2560×1440 patch, the aspect/projection calculation was adjusted around a 4:3 reference width of **1920** for a 1440-pixel-tall frame:
+| Shape | Example | Shift |
+|---|---|---|
+| 5:4 | 1280x1024 | -20 |
+| 4:3 | 1600x1200 | 0, the files stay as they are |
+| 16:10 | 1680x1050 | +65 |
+| 16:9 | 2560x1440 | +108 |
+| 21:9 | 3440x1440 | +256 |
+| 32:9 | 5120x1440 | +539 |
 
-```text
-1440 × 4 / 3 = 1920
-```
+- **To the right:** the speedometer and everything on it, and the race time, lap and position text.
+- **To the left:** the communicator and everything on it, the character portraits and the player portraits.
+- **Unchanged:** everything else, including all `Scale` values and all vertical positions. Elements in the middle stay in the middle.
 
-This keeps the original 4:3 vertical framing while allowing the wider 2560-pixel output to show extra image on the sides.
-
-An additional horizontal tuning factor was applied after testing. Resulting in a proper 16:9 image, no visible 3D stretching, and acceptable HUD behavior when combined with the patched overlay files.
-
-### 3. Texture memory crash fix
-
-Not widescreen related: the game's texture memory test is skipped, and the game is told it has 64 MB. The game keeps sizing its texture cache from its own `custom_texture_memory` setting (4–8 MB by default, well below 64 MB); it just no longer crashes on cards with more than 128 MB. See [Crash fix for modern graphics cards](#crash-fix-for-modern-graphics-cards-v104).
-
-## What the overlay `.ini` files do
-
-The overlay `.ini` files control the HUD layout and many 2D on-screen elements. These include:
-
-- speedometer
-- turbo dial
-- damage meter
-- euro counter
-- communicator panel
-- character portrait popups
-- race timer
-- lap / round text
-- position text
-- direction arrows
-- finish text styling
-
-The original overlay files are laid out for a **640×480 4:3 virtual canvas**. When the game is rendered in 16:9, those HUD elements can become stretched, misplaced, or too close to the old 4:3 center area.
-
-The patched overlay files keep the HUD usable and visually correct at 16:9.
-
-## Main overlay changes compared with the original game files
-
-### HUD horizontal unstretch
-
-Most HUD image elements received an X-scale correction such as:
-
-```ini
-Scale = 0.75,1,1
-```
-
-This compensates for the 4:3-to-16:9 horizontal stretch while preserving the vertical size.
-
-Text elements that had their own scale values were adjusted similarly, for example:
-
-```ini
-Scale = 0.525,0.7,0.7
-Scale = 0.6,0.8,0.8
-Scale = 0.45,0.6,0.6
-```
-
-The goal was to make text and sprites look proportionally correct rather than wide or flattened.
-
-### Speedometer moved and corrected
-
-The speedometer was moved toward the lower-right 16:9 screen edge and its internal parts were realigned.
-
-Changed speedometer-related elements include:
-
-```text
-OVL_SPEEDOMETER_BODY
-OVL_SPEEDOMETER_GLAS
-OVL_SPEEDOMETER_STRIPES
-OVL_SPEEDOMETER_HLTH
-OVL_SPEEDOMETER_HLTH_BK
-OVL_SPEEDOMETER_DIAL
-OVL_SPEEDOMETER_DOP
-OVL_SPEEDOMETER_RED_LED
-OVL_SPEEDOMETER_RED_LUD
-OVL_SPEEDOMETER_RED_GLOW
-OVL_SPEEDOMETER_GRN_LED
-OVL_SPEEDOMETER_GRN_LUD
-OVL_SPEEDOMETER_GRN_GLOW
-OVL_SPEEDOMETER_TURBODIAL
-OVL_SPEEDOMETER_TURBODOP
-STRING_DAMAGE_TXT
-STRING_EURO_MONEY
-STRING_EURO_SIGN
-```
-
-The speedometer dials, damage text, euro counter, and green/red indicator lights were individually tuned so they line up with the speedometer graphic.
-
-### Communicator moved and corrected
-
-The communicator panel was moved toward the lower-left 16:9 screen edge and its internal elements were aligned together.
-
-Changed communicator-related elements include:
-
-```text
-OVL_COMMUNICATOR_BODY
-OVL_COMMUNICATOR_GLAS1
-OVL_COMMUNICATOR_GLAS2
-OVL_COMMUNICATOR_HLTH
-OVL_COMMUNICATOR_HLTH_BK
-OVL_COMMUNICATOR_RED_LED
-OVL_COMMUNICATOR_RED_LUD
-OVL_COMMUNICATOR_RED_GLOW
-STRING_0_COMMUNICATOR
-STRING_1_COMMUNICATOR
-STRING_2_COMMUNICATOR
-STRING_3_COMMUNICATOR
-```
-
-The character portrait popup elements used by the communicator were also adjusted so they line up with the communicator panel.
-
-### Player position portraits moved
-
-The `[Portraits]` composite was moved to fit the 16:9 layout better.
-
-The final tuned value is:
-
-```ini
-[Portraits]
-Position = -90,-59,0
-```
-
-This places the player-position portrait stack near the upper-left edge without falling off-screen.
-
-### Top-right race text moved
-
-The race timer, current lap/round, and current position strings were moved toward the upper-right 16:9 edge.
-
-Changed elements include:
-
-```text
-STRING_RACE_TIME_VALUE
-STRING_CUR_LAP
-STRING_CUR_POS
-STRING_COUNTDOWN_TIMER
-```
-
-### Direction and turnaround indicators adjusted
-
-Direction arrows and the turnaround indicator were moved and scaled for the wider output.
-
-Changed elements include:
-
-```text
-OVL_DIRECTION_GOLEFT
-OVL_DIRECTION_GORIGHT
-OVL_DIRECTION_GOBOTH
-OVL_DIRECTION_GOZIGZAG
-OVL_TURNAROUND_FRAME
-```
-
-These use:
-
-```ini
-Position = 320,-30,0
-Scale    = 1,1.25,1.25
-```
-
-### Finish text styling
-
-The finish-position strings and finish prompt were adjusted in the `.ini` files.
-
-Changed elements include:
-
-```text
-STRING_FINISH_POS_1
-STRING_FINISH_POS_2
-STRING_FINISH_POS_3
-STRING_FINISH_POS_4
-STRING_FINISH_POS_5
-STRING_FINISH_TEXT
-```
-
-Important note: testing showed that the **scale/color** of the finish-position strings is read from the `.ini` files, but their **position appears to be overwritten by the game at runtime**. So the `.ini` position values for `STRING_FINISH_POS_*` may not affect the final in-game placement.
-
-## Known limitation
-
-The finish-position text shown at the end of a race appears to have its position controlled by executable code rather than only by the overlay `.ini` files.
-
-During testing:
-
-- changing `STRING_FINISH_POS_*` color worked;
-- changing `STRING_FINISH_POS_*` scale worked;
-- changing `STRING_FINISH_POS_*` position did **not** move the text.
-
-This strongly suggests the game assigns finish-result positions dynamically at runtime.
+Because older versions of this fix tuned the files by hand, the patcher refuses to build on such a file: it asks you to restore the original from the game CD if it can't find one in `4x3_backup`.
 
 ## Installation
 
@@ -326,7 +128,7 @@ This strongly suggests the game assigns finish-result positions dynamically at r
 
 3. Start the racing part of the game normally.
 
-To install by hand instead, for example on Windows 2000: back up `spel.dat` and the overlay `.ini` files, patch `spel.dat` with the steps in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#manual-patching-on-windows), and copy the files from `A2Racer4_DashboardFix.zip` into the game folder.
+To install by hand instead: back up `spel.dat` and the overlay `.ini` files, patch `spel.dat` with the steps in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#manual-patching-on-windows), and copy the files from `A2Racer4_DashboardFix.zip` into the game folder.
 
 ## Playing from a disc image
 
@@ -339,13 +141,11 @@ Making the image requires the original disc. Tools such as ImgBurn (Windows) or 
 
 ## Notes
 
-- This fix was tuned for **2560×1440 16:9**. I was not able to test other resolutions yet.
-- The overlay layout was manually tuned by in-game testing.
-- The 3D fix is native and does not rely on stretching the image.
+- The 3D view and HUD layout are calculated from the game's own code. Since v1.1.0 they no longer use hand-tuned values.
+- v1.1.0 was checked in-game by the author. The files it writes were compared under Wine at shapes from 5:4 to 32:9.
+- The 32-bit Windows version is a small C program since v1.1.0, tested under Wine in Windows 98, XP, 7 and 10 mode. It hasn't been run on any real Windows yet. Earlier versions of the same code ran on Windows 98 SE in a VM.
+- The 32-bit Linux version was tested in earlier releases on a 32-bit Linux 3.18 kernel in QEMU, on emulated processors without SSE2.
 - Back up your original files before installing.
 - This project does not include original game assets beyond modified configuration/executable patch files.
 - All testing was done on Fedora Linux 44 running the game through Wine using DXVK and DgVoodoo in tandem.
 - The v1.0.4 crash fix was tested on Fedora Linux 44 with plain Wine 11.19, D7VK v2.4, and dgVoodoo 2.80 with `VRAM = 256` (which crashes without the fix). It hasn't been tested on Windows yet.
-- The 32-bit patchers were tested on 64-bit Fedora Linux 44: the Linux version directly, the Windows version under Wine 11.20. They wrote the same files as the 64-bit patchers. The Linux version also ran on a 32-bit Linux 3.18 kernel in QEMU, on emulated Pentium III and Athlon processors without SSE2. They haven't been tested on a real 32-bit PC or on actual 32-bit Windows yet.
-- The v1.0.8 32-bit Windows version is built with Go 1.10, the last Go release that runs on Windows XP. It was tested in the Windows PE environment on Microsoft's Windows Embedded POSReady 2009 disc in a VM, which is XP SP3 code but not a full desktop installation, also on emulated Pentium MMX, Pentium III and Athlon processors without SSE2. It and the 64-bit version were also tested on 64-bit Windows 10 LTSC 2021 in a VM, including the administrator prompt. Windows XP SP2, XP x64, Vista, 7, 8, 8.1 and actual 32-bit Windows 10 rest on Go's documentation and haven't been tested yet.
-- The v1.0.9 Windows 95, 98 and Me version was tested on Windows 98 SE in a VM, on an installed copy of the game, and under Wine in Windows 98 mode, where it wrote the same files as the other patchers. It hasn't been tested on Windows 95, Windows Me or a real old PC yet, and the patched game hasn't been started on Windows 98 yet.

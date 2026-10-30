@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -17,16 +16,16 @@ import (
 )
 
 const (
-	patcherVersion  = "1.0.9"
+	patcherVersion  = "1.1.0"
 	gameFileName    = "spel.dat"
 	backupDir       = "4x3_backup"
 	extraCarOverlay = "overlay7.ini"
 )
 
-// The 32-bit Windows version is built with Go 1.10, the last release that runs
-// on Windows XP, so this code sticks to what Go 1.10 has: ioutil and %v instead
-// of their newer replacements. The patched HUD files reach overlayNames and
-// overlayData through overlays_embed.go or, for Go 1.10, gen_overlays_legacy.go.
+var overlayNames = []string{
+	"overlay0.ini", "overlay1.ini", "overlay2.ini", "overlay3.ini",
+	"overlay4.ini", "overlay5.ini", "overlay6.ini", extraCarOverlay,
+}
 
 var widthOffsets = []int{
 	0x1B3798,
@@ -106,7 +105,7 @@ func run() bool {
 	fmt.Println("The texture memory crash fix for modern graphics cards is included.")
 	fmt.Println()
 
-	if err := installOverlays(gameDir); err != nil {
+	if err := installOverlays(gameDir, width, height); err != nil {
 		fmt.Println()
 		fmt.Println("Copying the HUD files failed:", err)
 		fmt.Println(gameFileName + " is patched, but not every HUD file was installed.")
@@ -204,11 +203,11 @@ func defaultGameDir() string {
 // writeVerified writes data and reads it back, so a write that silently did
 // not happen, for example because a virus scanner undid it, is reported.
 func writeVerified(path string, data []byte) error {
-	if err := ioutil.WriteFile(path, data, 0644); err != nil {
+	if err := os.WriteFile(path, data, 0644); err != nil {
 		return err
 	}
 
-	written, err := ioutil.ReadFile(path)
+	written, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("could not read %s back after writing: %v", path, err)
 	}
@@ -293,7 +292,7 @@ func backupPathFor(gameDir string, name string) (string, error) {
 }
 
 func askResolution(reader *bufio.Reader) (int, int, error) {
-	fmt.Print("Enter desired 16:9 resolution, for example 2560x1440: ")
+	fmt.Print("Enter desired resolution, for example 2560x1440: ")
 
 	line, err := reader.ReadString('\n')
 	if err != nil && len(line) == 0 {
@@ -322,13 +321,6 @@ func askResolution(reader *bufio.Reader) (int, int, error) {
 		return 0, 0, fmt.Errorf("resolution values must be between 1 and 65535")
 	}
 
-	// The patch was designed for 16:9. Warn, but do not reject, so custom 16:9-ish
-	// modes like 1366x768 can still be tested.
-	aspect := float64(width) / float64(height)
-	if aspect < 1.70 || aspect > 1.82 {
-		fmt.Printf("Warning: %dx%d is not very close to 16:9. Continuing anyway.\n", width, height)
-	}
-
 	return width, height, nil
 }
 
@@ -340,7 +332,7 @@ func patchInPlace(gameDir string, width int, height int) error {
 		return fmt.Errorf("%v. Nothing was changed", err)
 	}
 
-	data, err := ioutil.ReadFile(inputPath)
+	data, err := os.ReadFile(inputPath)
 	if err != nil {
 		return unchanged(fmt.Errorf("could not read %s: %v", gameFileName, err))
 	}
@@ -380,22 +372,214 @@ func patchInPlace(gameDir string, width int, height int) error {
 	return nil
 }
 
-// installOverlays copies the patched HUD overlay files into the game folder
-// and moves the files they replace to the backup folder. overlay7.ini comes
-// with the "Schaduw" extra car update, which would overwrite it again, so it
-// is only replaced when that update is already installed.
-func installOverlays(gameDir string) error {
-	names, err := overlayNames()
-	if err != nil {
-		return err
+// hudShift is how far HUD elements attached to a screen edge move, in the
+// game's HUD units. The game places HUD x at x*0.99/320-1 in view space, and the
+// view reaches +-0.75*width/height, so the edges move by
+// (0.75*width/height-1)*320/0.99, which is 0 at 4:3.
+func hudShift(width int, height int) int {
+	numerator := (3*width - 4*height) * 8000
+	denominator := 99 * height
+	if numerator < 0 {
+		return (numerator - denominator/2) / denominator
+	}
+	return (numerator + denominator/2) / denominator
+}
+
+// hudEdge says which screen edge a HUD element is attached to: -1 left, 1 right,
+// 0 for elements that stay centered or that the game places itself.
+func hudEdge(section string, parent string) int {
+	name := strings.ToUpper(section)
+	switch {
+	case strings.EqualFold(parent, "Speedometer"),
+		name == "STRING_RACE_TIME_VALUE", name == "STRING_CUR_LAP", name == "STRING_CUR_POS":
+		return 1
+	case strings.EqualFold(parent, "Communicator"),
+		strings.HasPrefix(name, "OVL_PORTRAITS_"), strings.HasPrefix(name, "PLAYER_"):
+		return -1
+	}
+	return 0
+}
+
+// iniLine splits an overlay file line into its section name, or its key and the
+// position of its value. Comments start with a semicolon.
+func iniLine(line string) (section string, key string, valueStart int) {
+	content := line
+	if i := strings.Index(content, ";"); i >= 0 {
+		content = content[:i]
 	}
 
-	for _, name := range names {
-		data, err := overlayData(name)
-		if err != nil {
-			return err
+	trimmed := strings.TrimSpace(content)
+	if strings.HasPrefix(trimmed, "[") {
+		if end := strings.Index(trimmed, "]"); end > 0 {
+			return trimmed[1:end], "", 0
 		}
+		return "", "", 0
+	}
 
+	equals := strings.Index(content, "=")
+	if equals < 0 {
+		return "", "", 0
+	}
+
+	valueStart = equals + 1
+	for valueStart < len(content) && (content[valueStart] == ' ' || content[valueStart] == '\t') {
+		valueStart++
+	}
+	return "", strings.ToLower(strings.TrimSpace(content[:equals])), valueStart
+}
+
+// shiftDecimal adds shift to the number at the start of value, which may have up
+// to three decimals, and returns the new number and how long the old one was.
+func shiftDecimal(value string, shift int) (string, int, bool) {
+	i := 0
+	negative := i < len(value) && value[i] == '-'
+	if negative {
+		i++
+	}
+
+	start := i
+	whole := 0
+	for i < len(value) && value[i] >= '0' && value[i] <= '9' {
+		whole = whole*10 + int(value[i]-'0')
+		i++
+	}
+	if i == start || whole > 1000000 {
+		return "", 0, false
+	}
+
+	milli := whole * 1000
+	if i < len(value) && value[i] == '.' {
+		i++
+		for unit := 100; i < len(value) && value[i] >= '0' && value[i] <= '9'; i++ {
+			if unit == 0 {
+				return "", 0, false
+			}
+			milli += int(value[i]-'0') * unit
+			unit /= 10
+		}
+	}
+	if negative {
+		milli = -milli
+	}
+	milli += shift * 1000
+
+	sign := ""
+	if milli < 0 {
+		sign = "-"
+		milli = -milli
+	}
+	text := sign + strconv.Itoa(milli/1000)
+	if milli%1000 != 0 {
+		fraction := strconv.Itoa(1000 + milli%1000)[1:]
+		text += "." + strings.TrimRight(fraction, "0")
+	}
+	return text, i, true
+}
+
+// transformOverlay returns an original overlay file with every element that is
+// attached to a screen edge moved to that edge for the chosen resolution. The
+// rest of the file stays as it is, so the HUD keeps its original size.
+func transformOverlay(data []byte, shift int) []byte {
+	lines := strings.SplitAfter(string(data), "\n")
+
+	parents := map[string]string{}
+	section := ""
+	for _, line := range lines {
+		name, key, valueStart := iniLine(line)
+		if name != "" {
+			section = name
+		} else if key == "parent" {
+			value := line[valueStart:]
+			if i := strings.IndexAny(value, " \t\r\n;"); i >= 0 {
+				value = value[:i]
+			}
+			parents[section] = value
+		}
+	}
+
+	var result bytes.Buffer
+	section = ""
+	for _, line := range lines {
+		name, key, valueStart := iniLine(line)
+		if name != "" {
+			section = name
+		} else if key == "position" {
+			if edge := hudEdge(section, parents[section]); edge != 0 {
+				if text, size, ok := shiftDecimal(line[valueStart:], edge*shift); ok {
+					line = line[:valueStart] + text + line[valueStart+size:]
+				}
+			}
+		}
+		result.WriteString(line)
+	}
+	return result.Bytes()
+}
+
+// isOriginalOverlay recognizes the game's own HUD layout. Moving a file that an
+// earlier patcher or a hand tuned HUD already changed would give a wrong result.
+func isOriginalOverlay(data []byte) bool {
+	section := ""
+	found := 0
+	for _, line := range strings.SplitAfter(string(data), "\n") {
+		name, key, valueStart := iniLine(line)
+		if name != "" {
+			section = name
+		} else if key == "position" {
+			value := line[valueStart:]
+			switch {
+			case strings.EqualFold(section, "OVL_SPEEDOMETER_BODY"):
+				if !strings.HasPrefix(value, "640,") {
+					return false
+				}
+				found++
+			case strings.EqualFold(section, "OVL_COMMUNICATOR_BODY"):
+				if !strings.HasPrefix(value, "0,") {
+					return false
+				}
+				found++
+			}
+		}
+	}
+	return found == 2
+}
+
+// originalOverlay finds the game's own version of an overlay file. The first
+// backup holds it after an earlier run, otherwise it is still in the game folder.
+func originalOverlay(gameDir string, name string) ([]byte, error) {
+	backup, hasBackup := findFile(filepath.Join(gameDir, backupDir), name)
+	target, exists := findFile(gameDir, name)
+
+	if hasBackup {
+		if data, err := os.ReadFile(backup); err != nil {
+			return nil, fmt.Errorf("could not read %s: %v", backup, err)
+		} else if isOriginalOverlay(data) {
+			return data, nil
+		}
+	}
+
+	if exists {
+		if data, err := os.ReadFile(target); err != nil {
+			return nil, fmt.Errorf("could not read %s: %v", target, err)
+		} else if isOriginalOverlay(data) {
+			return data, nil
+		}
+	}
+
+	if !hasBackup && !exists {
+		return nil, fmt.Errorf("there is no %s in %s", name, gameDir)
+	}
+
+	return nil, fmt.Errorf("no original %s found: it was changed by an older HUD fix. Restore it from the game CD and run the patcher again", name)
+}
+
+// installOverlays writes the HUD overlay files for the chosen resolution, made
+// from the game's own files, and moves the files they replace to the backup
+// folder. overlay7.ini comes with the "Schaduw" extra car update, which would
+// overwrite it again, so it is only written when that update is already installed.
+func installOverlays(gameDir string, width int, height int) error {
+	shift := hudShift(width, height)
+
+	for _, name := range overlayNames {
 		target, exists := findFile(gameDir, name)
 
 		if name == extraCarOverlay && !exists {
@@ -404,9 +588,15 @@ func installOverlays(gameDir string) error {
 			continue
 		}
 
+		original, err := originalOverlay(gameDir, name)
+		if err != nil {
+			return err
+		}
+		data := transformOverlay(original, shift)
+
 		backupPath := ""
 		if exists {
-			current, err := ioutil.ReadFile(target)
+			current, err := os.ReadFile(target)
 			if err != nil {
 				return fmt.Errorf("could not read %s: %v", target, err)
 			}
@@ -440,6 +630,40 @@ func installOverlays(gameDir string) error {
 	}
 
 	return nil
+}
+
+// floatBits returns numerator/denominator as a 32-bit float, rounded to nearest.
+// It uses only integers, so every build of the patcher writes the same bytes.
+// Both values have to stay below 2^24.
+func floatBits(numerator uint32, denominator uint32) uint32 {
+	exponent := uint32(127)
+	for numerator < denominator {
+		numerator *= 2
+		exponent--
+	}
+	for numerator >= denominator*2 {
+		denominator *= 2
+		exponent++
+	}
+
+	mantissa := uint32(0)
+	for i := 0; i < 24; i++ {
+		mantissa *= 2
+		if numerator >= denominator {
+			mantissa++
+			numerator -= denominator
+		}
+		numerator *= 2
+	}
+	if numerator >= denominator {
+		mantissa++
+		if mantissa == 1<<24 {
+			mantissa = 1 << 23
+			exponent++
+		}
+	}
+
+	return exponent<<23 | (mantissa & 0x7FFFFF)
 }
 
 func applyWidescreenPatch(data []byte, width int, height int) error {
@@ -512,25 +736,51 @@ func applyWidescreenPatch(data []byte, width int, height int) error {
 		return err
 	}
 
-	// Candidate J horizontal clip tuning:
-	// -1.0 -> -1.25
+	// The game places the HUD with the real screen shape, which squashes it on
+	// anything but 4:3. Use the 4:3 reference width there too, so the HUD keeps its
+	// original proportions and height, including what the game places itself:
+	// fidiv dword ptr ds:0x005B3798 -> fidiv dword ptr ds:0x005973D0 (HUD scale)
 	if err := patchBytes(
-		0x0C0E8A,
-		[]byte{0xC7, 0x46, 0x14, 0x00, 0x00, 0x80, 0xBF},
-		[]byte{0xC7, 0x46, 0x14, 0x00, 0x00, 0xA0, 0xBF},
-		"horizontal clip x",
+		0x07CDD1,
+		[]byte{0xDA, 0x35, 0x98, 0x37, 0x5B, 0x00},
+		[]byte{0xDA, 0x35, 0xD0, 0x73, 0x59, 0x00},
+		"HUD scale",
 	); err != nil {
 		return err
 	}
 
-	// 2.0 -> 2.5
-	if err := patchBytes(
-		0x0C0E96,
-		[]byte{0xC7, 0x46, 0x1C, 0x00, 0x00, 0x00, 0x40},
-		[]byte{0xC7, 0x46, 0x1C, 0x00, 0x00, 0x20, 0x40},
-		"horizontal clip width",
-	); err != nil {
-		return err
+	// fild dword ptr ds:0x005B3798 -> fild dword ptr ds:0x005973D0 (HUD position, twice)
+	for _, offset := range []int{0x07FE55, 0x080534} {
+		if err := patchBytes(
+			offset,
+			[]byte{0xDB, 0x05, 0x98, 0x37, 0x5B, 0x00},
+			[]byte{0xDB, 0x05, 0xD0, 0x73, 0x59, 0x00},
+			"HUD position",
+		); err != nil {
+			return err
+		}
+	}
+
+	// The horizontal view for this screen shape: with the vertical view fixed at
+	// +-0.75, +-0.75*width/height gives square pixels, and exactly +-1 at 4:3.
+	// mov dword ptr [esi+0x14], -0.75*width/height
+	// mov dword ptr [esi+0x1C], 1.5*width/height
+	clip := []struct {
+		offset int
+		opcode []byte
+		label  string
+		value  uint32
+	}{
+		{0x0C0E8A, []byte{0xC7, 0x46, 0x14}, "horizontal clip x", floatBits(uint32(3*width), uint32(4*height)) | 0x80000000},
+		{0x0C0E96, []byte{0xC7, 0x46, 0x1C}, "horizontal clip width", floatBits(uint32(3*width), uint32(2*height))},
+	}
+	for _, c := range clip {
+		if !bytes.Equal(data[c.offset:c.offset+3], c.opcode) {
+			return fmt.Errorf("%s bytes did not match expected original pattern at 0x%X. This may be the wrong spel.dat version", c.label, c.offset)
+		}
+		if err := putU32(c.offset+3, c.value); err != nil {
+			return err
+		}
 	}
 
 	// Texture memory crash fix (not widescreen related):

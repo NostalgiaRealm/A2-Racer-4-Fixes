@@ -1,53 +1,22 @@
-# Technical notes: A2 Racer 4 `spel.dat` 16:9 widescreen patch
+# Technical notes: A2 Racer 4 `spel.dat` resolution patch
 
-This document explains how the patched `spel.dat` was modified so **A2 Racer 4** can render the racing part of the game at a native 16:9 resolution without horizontally stretching the 3D image.
-
-The working reference build discussed here is the patched spel.dat fixed for 2560x1440 output.
-
-The explanations below are written for the **2560×1440** version, but the same method can be adapted to other 16:9 resolutions.
+This document explains how `spel.dat` is modified so **A2 Racer 4** renders correctly at any resolution. Everything depends only on the chosen width `W` and height `H`. The examples use 2560×1440.
 
 ## Important background
 
 A2 Racer 4 uses `spel.dat` as the executable module for the actual DirectDraw/Direct3D racing portion of the game. Even though the extension is `.dat`, it is a normal PE32 Windows executable.
 
-The original game is designed around 4:3 display modes. If a 16:9 display mode is forced naively, the game does not automatically become proper widescreen. Depending on what is patched, the result can be:
+The original game is designed around 4:3 display modes. If another display mode is forced, the game does not adapt by itself: the 3D view and the HUD both distort.
 
-- a horizontally stretched 3D image;
-- a vertically zoomed/cropped image;
-- a correct 3D image but stretched HUD;
-- a correct 3D image with HUD fixed separately through the overlay `.ini` files.
+The patch:
 
-The final working approach is:
-
-1. patch the display-mode table to request the desired 16:9 resolution;
-2. patch the Direct3D viewport/projection setup so the 3D image uses a Hor+ widescreen view;
-3. leave HUD layout correction to the `overlay*.ini` files.
+1. sets the display-mode table to the chosen resolution;
+2. keeps the vertical view of the Direct3D viewport at 4:3 and calculates the horizontal view from the screen shape;
+3. makes the HUD use the 4:3 shape as well, and leaves its horizontal placement to the `overlay*.ini` files, which the patcher moves to the screen edges.
 
 ## What “Hor+” means here
 
-The goal is not to stretch the old 4:3 frame.
-
-The desired behavior is:
-
-```text
-Original 4:3:
-  same vertical view
-  narrower horizontal view
-
-Patched 16:9:
-  same vertical view
-  wider horizontal view
-```
-
-This is usually called **Hor+** widescreen behavior.
-
-For a 2560×1440 16:9 output, the game should keep the 4:3 vertical framing that would correspond to:
-
-```text
-1440 × 4 / 3 = 1920
-```
-
-So internally, the projection should behave as if the 1440-pixel-tall frame had a 4:3 reference width of **1920**, while the actual output surface is **2560×1440**.
+The vertical view stays as it is at 4:3, and the horizontal view follows the shape of the screen. A wider screen shows more on the sides. A screen narrower than 4:3, such as 5:4, shows slightly less.
 
 ## PE layout notes
 
@@ -71,17 +40,15 @@ file offset 0x1B3798 -> VA 0x005B3798
 file offset 0x1973D0 -> VA 0x005973D0
 ```
 
-## Summary of the 2560×1440 patch
+## Summary of the patch
 
-It contains three important changes:
-
-1. display-mode table values changed to `2560×1440`;
-2. the Direct3D viewport aspect calculation redirects its divisor to a new 4:3 reference width value, `1920`;
-3. the horizontal clip range is widened from `[-1.0, +1.0]` to approximately `[-1.25, +1.25]`.
-
-The third part is an empirical tuning specific to this game. A mathematically pure 16:9 conversion would suggest a 4:3-to-16:9 factor of `1.333...`, but in this game that was not the best result. Testing showed that `1.25` produced the correct-looking 3D image without visible stretching.
-
-Since v1.0.4 the patcher also applies a fourth change that is not widescreen related: a fix for the crash at race start on graphics cards with more than ~128 MB of video memory. See [Patch part 4](#patch-part-4-texture-memory-crash-fix).
+| Part | Change |
+|---|---|
+| 1 | Display-mode table set to `W`×`H` |
+| 2 | Viewport divides by a stored 4:3 reference width `(H × 4 + 1) / 3` instead of `W` |
+| 3 | Horizontal clip range becomes `±0.75 × W / H` |
+| 4 | Texture memory crash fix, not related to the screen shape |
+| 5 | HUD code uses the 4:3 reference width instead of `W`, in three places |
 
 ## Patch part 1: display-mode table
 
@@ -95,7 +62,7 @@ The original executable contains repeated display-mode entries such as:
 1600×1200
 ```
 
-The 2560×1440 patch changes those relevant entries to:
+For 2560×1440 those entries become:
 
 ```text
 2560×1440
@@ -224,67 +191,28 @@ DA 35 D0 73 59 00
 
 This makes the game divide by the 4:3 reference width instead of the actual 16:9 output width.
 
-## Patch part 3: horizontal clip expansion
+## Patch part 3: horizontal clip range
 
-The same viewport setup block writes the Direct3D clip rectangle.
-
-Original values include:
+The same viewport setup block writes the Direct3D clip rectangle, a `D3DVIEWPORT2`:
 
 ```asm
-mov dword ptr [esi+0x14], 0xBF800000   ; -1.0
-mov dword ptr [esi+0x1C], 0x40000000   ;  2.0
+mov dword ptr [esi+0x14], 0xBF800000   ; dvClipX     = -1.0
+mov dword ptr [esi+0x1C], 0x40000000   ; dvClipWidth =  2.0
 ```
 
-These represent a horizontal clip range from `-1.0` with a width of `2.0`, which gives:
+With part 2 the vertical range is `±0.75`. Pixels are square when the two ranges have the shape of the screen, so:
 
 ```text
--1.0 to +1.0
+dvClipX     = -0.75 × W / H
+dvClipWidth =  1.5  × W / H
 ```
 
-The 2560×1440 patch changes this to:
+The values are written as 32-bit floats. At 4:3 this gives the original `-1.0` and `2.0`. At 16:9 it gives `-1.3333` and `2.6667`.
 
-```asm
-mov dword ptr [esi+0x14], 0xBFA00000   ; -1.25
-mov dword ptr [esi+0x1C], 0x40200000   ;  2.5
-```
-
-That gives:
-
-```text
--1.25 to +1.25
-```
-
-This expands the horizontal 3D view while preserving the vertical framing.
-
-### Horizontal clip bytes
-
-At file offset `0x0C0E8A`, VA `0x004C0E8A`:
-
-Original:
-
-```text
-C7 46 14 00 00 80 BF
-```
-
-Patched:
-
-```text
-C7 46 14 00 00 A0 BF
-```
-
-At file offset `0x0C0E96`, VA `0x004C0E96`:
-
-Original:
-
-```text
-C7 46 1C 00 00 00 40
-```
-
-Patched:
-
-```text
-C7 46 1C 00 00 20 40
-```
+| File offset | VA | Original | Patched for 16:9 |
+|---|---|---|---|
+| `0x0C0E8A` | `0x004C0E8A` | `C7 46 14 00 00 80 BF` | `C7 46 14 AB AA AA BF` |
+| `0x0C0E96` | `0x004C0E96` | `C7 46 1C 00 00 00 40` | `C7 46 1C AB AA 2A 40` |
 
 ## Patch part 4: texture memory crash fix
 
@@ -346,6 +274,27 @@ Available texture memory: 4000000   (Real texture memory: 67108864)
 
 Game versions 1.00 and 1.01 ship an identical `spel.dat`, so the same bytes apply to both. None of the widescreen changes are near this offset.
 
+## Patch part 5: HUD proportions
+
+Three functions place the HUD and use the real screen shape:
+
+```text
+FUN_0047cd90, scale:     y = (H / W) × 0.99 / 240
+FUN_0047fd20, position:  y = (1 - 0.99 / 240 × y) × (4/3) / (W / H)
+FUN_00480500, position:  the same as FUN_0047fd20
+x in both:               x = 0.99 / 320 × x - 1
+```
+
+On anything but 4:3 this squashes the HUD vertically. Using the 4:3 reference width from part 2 in place of `W` makes the vertical terms the same as at 4:3, so nothing needs a different `Scale`, including what the game places itself.
+
+| File offset | VA | Original | Patched |
+|---|---|---|---|
+| `0x07CDD1` | `0x0047CDD1` | `DA 35 98 37 5B 00` | `DA 35 D0 73 59 00` |
+| `0x07FE55` | `0x0047FE55` | `DB 05 98 37 5B 00` | `DB 05 D0 73 59 00` |
+| `0x080534` | `0x00480534` | `DB 05 98 37 5B 00` | `DB 05 D0 73 59 00` |
+
+Horizontally, HUD `x` reaches the screen edges where `0.99 / 320 × x - 1 = ±0.75 × W / H`. Compared with 4:3 the edges move by `(0.75 × W / H - 1) × 320 / 0.99`, which is the shift the patcher applies to elements attached to an edge. See [Overlay files](#overlay-files).
+
 ## Manual patching on Windows
 
 ### Recommended tools
@@ -391,102 +340,19 @@ This confirms that the `.dat` file is really a Windows executable.
 
 ### Step 3: patch the display-mode table
 
-In HxD or 010 Editor, go to each display-mode table file offset listed above and overwrite the 16-bit little-endian values.
-
-For 2560×1440:
-
-```text
-Width  2560 -> 00 0A
-Height 1440 -> A0 05
-```
-
-Example:
-
-At file offset `0x1B3798`, write:
-
-```text
-00 0A
-```
-
-At file offset `0x1B379C`, write:
-
-```text
-A0 05
-```
-
-Repeat for all relevant width/height offsets.
+In HxD or 010 Editor, go to each display-mode table file offset listed above and overwrite the 16-bit little-endian values with your width and height. For 2560×1440 that is `00 0A` and `A0 05`.
 
 ### Step 4: create the 4:3 reference denominator
 
-At file offset:
+At file offset `0x1973D0`, write `(H × 4 + 1) / 3`, rounded down, as a 32-bit little-endian value. For a height of 1440 that is `1920`: `80 07 00 00`.
 
-```text
-0x1973D0
-```
+### Step 5: redirect the aspect division and the HUD
 
-write the 32-bit little-endian value for `1920`:
+Make the changes from [Patch part 2](#patch-part-2-43-aspect-denominator) and [Patch part 5](#patch-part-5-hud-proportions).
 
-```text
-80 07 00 00
-```
+### Step 6: set the horizontal clip range
 
-### Step 5: redirect the aspect division
-
-At file offset:
-
-```text
-0x0C0E57
-```
-
-replace:
-
-```text
-DA 35 98 37 5B 00
-```
-
-with:
-
-```text
-DA 35 D0 73 59 00
-```
-
-### Step 6: expand the horizontal clip range
-
-At file offset:
-
-```text
-0x0C0E8A
-```
-
-replace:
-
-```text
-C7 46 14 00 00 80 BF
-```
-
-with:
-
-```text
-C7 46 14 00 00 A0 BF
-```
-
-At file offset:
-
-```text
-0x0C0E96
-```
-
-replace:
-
-```text
-C7 46 1C 00 00 00 40
-```
-
-with:
-
-```text
-C7 46 1C 00 00 20 40
-```
+At file offsets `0x0C0E8D` and `0x0C0E99`, write `-0.75 × W / H` and `1.5 × W / H` as 32-bit little-endian floats. A value for 16:9 is in [Patch part 3](#patch-part-3-horizontal-clip-range).
 
 ### Step 7: fix the texture memory crash
 
@@ -522,22 +388,7 @@ Then place it in the game directory.
 
 ### Step 9: install the overlay `.ini` files
 
-The executable patch fixes the 3D rendering. It does not fully fix the HUD by itself.
-
-Use the overlay package as well, which contains:
-
-```text
-overlay0.ini
-overlay1.ini
-overlay2.ini
-overlay3.ini
-overlay4.ini
-overlay5.ini
-overlay6.ini
-overlay7.ini
-```
-
-paste them into the same directory as the game expects them. `overlay7.ini` is only needed with the "Schaduw" extra car update.
+See [Overlay files](#overlay-files), or use `A2Racer4_DashboardFix.zip` on a 16:9 screen.
 
 ## Manual patching on Linux
 
@@ -588,13 +439,13 @@ After patching, this should become:
 ```asm
 004c0e57: da 35 d0 73 59 00     fidiv  DWORD PTR ds:0x5973d0
 ...
-004c0e8a: c7 46 14 00 00 a0 bf  mov    DWORD PTR [esi+0x14],0xbfa00000
-004c0e96: c7 46 1c 00 00 20 40  mov    DWORD PTR [esi+0x1c],0x40200000
+004c0e8a: c7 46 14 ab aa aa bf  mov    DWORD PTR [esi+0x14],0xbfaaaaab   ; 16:9
+004c0e96: c7 46 1c ab aa 2a 40  mov    DWORD PTR [esi+0x1c],0x402aaaab   ; 16:9
 ```
 
 ### Step 3: patch with Python
 
-This Python script applies the 2560×1440 patch to an input `spel.dat`.
+This Python script applies the patch to an input `spel.dat`.
 
 Save as:
 
@@ -669,40 +520,27 @@ for offset in height_offsets:
     data[offset:offset + 2] = struct.pack("<H", height)
 
 # Store the 4:3 reference denominator.
-# For 2560x1440 this is 1920.
+# For a height of 1440 this is 1920.
 data[0x1973D0:0x1973D0 + 4] = struct.pack("<I", aspect_denominator)
 
-# Redirect: fidiv dword ptr ds:0x005B3798
-# to:       fidiv dword ptr ds:0x005973D0
-old = bytes.fromhex("DA 35 98 37 5B 00")
-new = bytes.fromhex("DA 35 D0 73 59 00")
-offset = 0x0C0E57
+def patch(offset, old, new, label):
+    old = bytes.fromhex(old)
+    new = bytes.fromhex(new)
+    if data[offset:offset + len(old)] != old and data[offset:offset + len(new)] != new:
+        raise RuntimeError(f"Unexpected bytes at {label}. Wrong executable version?")
+    data[offset:offset + len(new)] = new
 
-if data[offset:offset + len(old)] != old and data[offset:offset + len(new)] != new:
-    raise RuntimeError("Unexpected bytes at aspect-division instruction. Wrong executable version?")
+# Use the 4:3 reference width for the viewport and the HUD.
+patch(0x0C0E57, "DA 35 98 37 5B 00", "DA 35 D0 73 59 00", "aspect division")
+patch(0x07CDD1, "DA 35 98 37 5B 00", "DA 35 D0 73 59 00", "HUD scale")
+patch(0x07FE55, "DB 05 98 37 5B 00", "DB 05 D0 73 59 00", "HUD position")
+patch(0x080534, "DB 05 98 37 5B 00", "DB 05 D0 73 59 00", "HUD position")
 
-data[offset:offset + len(new)] = new
-
-# Horizontal clip expansion.
-# -1.0 -> -1.25
-old = bytes.fromhex("C7 46 14 00 00 80 BF")
-new = bytes.fromhex("C7 46 14 00 00 A0 BF")
-offset = 0x0C0E8A
-
-if data[offset:offset + len(old)] != old and data[offset:offset + len(new)] != new:
-    raise RuntimeError("Unexpected bytes at clip-x instruction. Wrong executable version?")
-
-data[offset:offset + len(new)] = new
-
-# 2.0 -> 2.5
-old = bytes.fromhex("C7 46 1C 00 00 00 40")
-new = bytes.fromhex("C7 46 1C 00 00 20 40")
-offset = 0x0C0E96
-
-if data[offset:offset + len(old)] != old and data[offset:offset + len(new)] != new:
-    raise RuntimeError("Unexpected bytes at clip-width instruction. Wrong executable version?")
-
-data[offset:offset + len(new)] = new
+# Horizontal clip range for this screen shape.
+if data[0x0C0E8A:0x0C0E8D] != bytes.fromhex("C7 46 14") or data[0x0C0E96:0x0C0E99] != bytes.fromhex("C7 46 1C"):
+    raise RuntimeError("Unexpected bytes at the clip range. Wrong executable version?")
+data[0x0C0E8D:0x0C0E91] = struct.pack("<f", -0.75 * width / height)
+data[0x0C0E99:0x0C0E9D] = struct.pack("<f", 1.5 * width / height)
 
 # Texture memory crash fix: skip the probe and report 64 MB.
 # mov eax, 0x1000 / call 0x00559400 / push ebx
@@ -746,7 +584,7 @@ objdump -D -Mintel \
   spel_2560x1440.dat
 ```
 
-Check that the `fidiv` line points to `0x5973d0` and the clip constants are `0xbfa00000` and `0x40200000`.
+Check that the `fidiv` line points to `0x5973d0` and the clip constants match your screen shape.
 
 Check the crash fix as well:
 
@@ -794,49 +632,29 @@ Expected output for 2560×1440:
 aspect denominator: 1920
 ```
 
-## Adapting to other 16:9 resolutions
+## Values for other resolutions
 
-For another 16:9 resolution:
+| Resolution | Reference denominator | dvClipX | dvClipWidth | HUD shift |
+|---|---|---:|---:|---:|
+| 1280×1024 | 1365 | -0.9375 | 1.875 | -20 |
+| 1600×1200 | 1600 | -1.0 | 2.0 | 0 |
+| 1680×1050 | 1400 | -1.2 | 2.4 | +65 |
+| 1920×1080 | 1440 | -1.3333 | 2.6667 | +108 |
+| 2560×1440 | 1920 | -1.3333 | 2.6667 | +108 |
+| 3440×1440 | 1920 | -1.7917 | 3.5833 | +256 |
+| 5120×1440 | 1920 | -2.6667 | 5.3333 | +539 |
 
-```text
-W × H
-```
+## Overlay files
 
-write:
-
-```text
-display width  = W
-display height = H
-aspect denominator = H × 4 / 3
-```
-
-Examples:
-
-| Resolution | Display width | Display height | 4:3 reference denominator |
-|---:|---:|---:|---:|
-| 1280×720 | 1280 | 720 | 960 |
-| 1600×900 | 1600 | 900 | 1200 |
-| 1920×1080 | 1920 | 1080 | 1440 |
-| 2560×1440 | 2560 | 1440 | 1920 |
-| 3840×2160 | 3840 | 2160 | 2880 |
-| 7680×4320 | 7680 | 4320 | 5760 |
-
-The horizontal clip constants from the 2560×1440 patch remain:
+The HUD uses separate configuration files, `overlay*.ini`, on a 640×480 canvas. Only the `x` of `Position` changes, starting from the game's own files:
 
 ```text
-clip x     = -1.25
-clip width =  2.5
+shift = (0.75 × W / H - 1) × 320 / 0.99, rounded
 ```
 
-Those values were empirically chosen for this game and should generally remain the same across 16:9 resolutions.
-
-## Why the overlay `.ini` files are still needed
-
-The `spel.dat` patch fixes the 3D world, but the HUD uses separate overlay configuration files.
-
-Without the overlay fix, the HUD can look stretched or misplaced even when the 3D scene is correct.
-
-Use the overlay files together with the patched executable.
+- **Add the shift:** every section with `Parent = Speedometer`, and `STRING_RACE_TIME_VALUE`, `STRING_CUR_LAP` and `STRING_CUR_POS`.
+- **Subtract the shift:** every section with `Parent = Communicator`, and every `OVL_PORTRAITS_*` and `PLAYER_*`.
+- **Leave alone:** everything else, including `Scale`.
 
 ## Troubleshooting
 
@@ -854,17 +672,11 @@ Check the `fidiv` patch at `0x0C0E57`. It must divide by the 4:3 reference denom
 
 ### The 3D image is zoomed or cropped
 
-Check the horizontal clip constants. The 2560×1440 patch uses:
-
-```text
--1.25 and 2.5
-```
-
-Using the wrong clip direction can produce Vert- behavior instead of Hor+ behavior.
+Check the horizontal clip constants against the formula in [Patch part 3](#patch-part-3-horizontal-clip-range).
 
 ### The HUD is stretched or misplaced
 
-That is handled by the `overlay*.ini` files, not by the `spel.dat` 3D patch alone.
+Elements in the wrong place come from the `overlay*.ini` files. A squashed HUD means the three HUD changes in [Patch part 5](#patch-part-5-hud-proportions) are missing.
 
 ### Finish-result text position does not move through `.ini`
 

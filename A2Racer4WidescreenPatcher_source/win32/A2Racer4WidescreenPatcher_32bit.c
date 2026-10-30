@@ -1,50 +1,26 @@
 /*
- * A2 Racer 4 Widescreen Patcher for Windows 95, 98 and Me.
+ * A2 Racer 4 Widescreen Patcher for 32-bit Windows, from Windows 95 through 10.
  *
- * Go has never supported Windows 9x, so this is a separate native program. It
- * has to do exactly what ../A2Racer4WidescreenPatcher.go does: keep the two in
- * step, and compare the files both write before each release. It only uses
- * functions that exist since Windows 95, and no C runtime.
+ * Current Go versions only run on Windows 10 or newer, so this is a separate
+ * native program. It has to do exactly what ../A2Racer4WidescreenPatcher.go does:
+ * keep the two in step, and compare the files both write before each release. It
+ * imports only functions that exist since Windows 95, looks up anything newer at
+ * runtime, and uses no C runtime.
  *
- * Build it from the parent folder, see ../README.md.
+ * Build it from this folder, see ../README.md.
  */
 #include <windows.h>
 
-#define PATCHER_VERSION "1.0.9"
+#define PATCHER_VERSION "1.1.0"
 #define GAME_FILE "spel.dat"
 #define BACKUP_DIR "4x3_backup"
 #define EXTRA_CAR_OVERLAY "overlay7.ini"
 #define MIN_GAME_SIZE 0x1B3932
 #define PATH_SIZE 600
 
-/* Patched HUD layout files (the dashboard fix), installed next to spel.dat. */
-#define EMBED(sym, file)                                                       \
-	__asm__(".section .rdata,\"dr\"\n_" #sym ":\n.incbin \"" file              \
-		"\"\n_" #sym "_end:\n.text\n");                                        \
-	extern const char sym[], sym##_end[]
-
-EMBED(overlay0, "overlays/overlay0.ini");
-EMBED(overlay1, "overlays/overlay1.ini");
-EMBED(overlay2, "overlays/overlay2.ini");
-EMBED(overlay3, "overlays/overlay3.ini");
-EMBED(overlay4, "overlays/overlay4.ini");
-EMBED(overlay5, "overlays/overlay5.ini");
-EMBED(overlay6, "overlays/overlay6.ini");
-EMBED(overlay7, "overlays/overlay7.ini");
-
-static const struct {
-	const char *name;
-	const char *start;
-	const char *end;
-} overlays[] = {
-	{"overlay0.ini", overlay0, overlay0_end},
-	{"overlay1.ini", overlay1, overlay1_end},
-	{"overlay2.ini", overlay2, overlay2_end},
-	{"overlay3.ini", overlay3, overlay3_end},
-	{"overlay4.ini", overlay4, overlay4_end},
-	{"overlay5.ini", overlay5, overlay5_end},
-	{"overlay6.ini", overlay6, overlay6_end},
-	{"overlay7.ini", overlay7, overlay7_end},
+static const char *const overlay_names[] = {
+	"overlay0.ini", "overlay1.ini", "overlay2.ini", "overlay3.ini",
+	"overlay4.ini", "overlay5.ini", "overlay6.ini", EXTRA_CAR_OVERLAY,
 };
 
 static const DWORD width_offsets[] = {
@@ -68,12 +44,15 @@ static const struct {
 	{0x0C0E57, "aspect division", 6,
 		{0xDA, 0x35, 0x98, 0x37, 0x5B, 0x00},
 		{0xDA, 0x35, 0xD0, 0x73, 0x59, 0x00}},
-	{0x0C0E8A, "horizontal clip x", 7,
-		{0xC7, 0x46, 0x14, 0x00, 0x00, 0x80, 0xBF},
-		{0xC7, 0x46, 0x14, 0x00, 0x00, 0xA0, 0xBF}},
-	{0x0C0E96, "horizontal clip width", 7,
-		{0xC7, 0x46, 0x1C, 0x00, 0x00, 0x00, 0x40},
-		{0xC7, 0x46, 0x1C, 0x00, 0x00, 0x20, 0x40}},
+	{0x07CDD1, "HUD scale", 6,
+		{0xDA, 0x35, 0x98, 0x37, 0x5B, 0x00},
+		{0xDA, 0x35, 0xD0, 0x73, 0x59, 0x00}},
+	{0x07FE55, "HUD position", 6,
+		{0xDB, 0x05, 0x98, 0x37, 0x5B, 0x00},
+		{0xDB, 0x05, 0xD0, 0x73, 0x59, 0x00}},
+	{0x080534, "HUD position", 6,
+		{0xDB, 0x05, 0x98, 0x37, 0x5B, 0x00},
+		{0xDB, 0x05, 0xD0, 0x73, 0x59, 0x00}},
 	{0x0BC0F0, "texture memory probe", 11,
 		{0xB8, 0x00, 0x10, 0x00, 0x00, 0xE8, 0x06, 0xD3, 0x09, 0x00, 0x53},
 		{0xC7, 0x81, 0xA1, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0xC3}},
@@ -433,7 +412,7 @@ static BOOL ask_resolution(int *width, int *height)
 	static char line[100];
 	const char *c = line;
 
-	say("Enter desired 16:9 resolution, for example 2560x1440: ");
+	say("Enter desired resolution, for example 2560x1440: ");
 
 	if (!read_line(line, sizeof(line)))
 		return FAIL("EOF");
@@ -459,11 +438,6 @@ static BOOL ask_resolution(int *width, int *height)
 	if (*width <= 0 || *height <= 0 || *width > 65535 || *height > 65535)
 		return FAIL("resolution values must be between 1 and 65535");
 
-	/* The patch was designed for 16:9. Warn, but do not reject, so custom 16:9-ish
-	   modes like 1366x768 can still be tested. */
-	if (*width * 100 < *height * 170 || *width * 100 > *height * 182)
-		SAY("Warning: %dx%d is not very close to 16:9. Continuing anyway.\r\n", *width, *height);
-
 	return TRUE;
 }
 
@@ -472,6 +446,51 @@ static void put_u16(char *data, DWORD offset, int value)
 	data[offset] = (char)value;
 	data[offset + 1] = (char)(value >> 8);
 }
+
+static void put_u32(char *data, DWORD offset, DWORD value)
+{
+	put_u16(data, offset, (int)(value & 0xFFFF));
+	put_u16(data, offset + 2, (int)(value >> 16));
+}
+
+/* numerator/denominator as a 32-bit float, rounded to nearest. It uses only
+   integers, so every build of the patcher writes the same bytes. */
+static DWORD float_bits(DWORD numerator, DWORD denominator)
+{
+	DWORD exponent = 127;
+	DWORD mantissa = 0;
+	int i;
+
+	while (numerator < denominator) {
+		numerator *= 2;
+		exponent--;
+	}
+	while (numerator >= denominator * 2) {
+		denominator *= 2;
+		exponent++;
+	}
+
+	for (i = 0; i < 24; i++) {
+		mantissa *= 2;
+		if (numerator >= denominator) {
+			mantissa++;
+			numerator -= denominator;
+		}
+		numerator *= 2;
+	}
+	if (numerator >= denominator) {
+		mantissa++;
+		if (mantissa == 1UL << 24) {
+			mantissa = 1UL << 23;
+			exponent++;
+		}
+	}
+
+	return exponent << 23 | (mantissa & 0x7FFFFF);
+}
+
+static const unsigned char clip_x_opcode[] = {0xC7, 0x46, 0x14};
+static const unsigned char clip_width_opcode[] = {0xC7, 0x46, 0x1C};
 
 static BOOL apply_widescreen_patch(char *data, int width, int height)
 {
@@ -486,8 +505,7 @@ static BOOL apply_widescreen_patch(char *data, int width, int height)
 
 	/* Keep a 4:3 projection reference width for the chosen output height. */
 	aspect_denominator = (height * 4 + 1) / 3;
-	put_u16(data, 0x1973D0, aspect_denominator & 0xFFFF);
-	put_u16(data, 0x1973D2, aspect_denominator >> 16);
+	put_u32(data, 0x1973D0, aspect_denominator);
 
 	for (i = 0; i < sizeof(code_patches) / sizeof(code_patches[0]); i++) {
 		char *current = data + code_patches[i].offset;
@@ -502,6 +520,16 @@ static BOOL apply_widescreen_patch(char *data, int width, int height)
 
 		memcpy(current, code_patches[i].replacement, size);
 	}
+
+	/* The horizontal view for this screen shape: with the vertical view fixed at
+	   +-0.75, +-0.75*width/height gives square pixels, and exactly +-1 at 4:3. */
+	if (!same_bytes(data + 0x0C0E8A, clip_x_opcode, 3))
+		return FAIL("horizontal clip x bytes did not match expected original pattern at 0xC0E8A. This may be the wrong spel.dat version");
+	if (!same_bytes(data + 0x0C0E96, clip_width_opcode, 3))
+		return FAIL("horizontal clip width bytes did not match expected original pattern at 0xC0E96. This may be the wrong spel.dat version");
+
+	put_u32(data, 0x0C0E8A + 3, float_bits(3 * width, 4 * height) | 0x80000000);
+	put_u32(data, 0x0C0E96 + 3, float_bits(3 * width, 2 * height));
 
 	return TRUE;
 }
@@ -563,27 +591,333 @@ static BOOL patch_in_place(int width, int height)
 	return TRUE;
 }
 
-/* Copies the patched HUD overlay files into the game folder and moves the files
-   they replace to the backup folder. overlay7.ini comes with the "Schaduw" extra
-   car update, which would overwrite it again, so it is only replaced when that
-   update is already installed. */
-static BOOL install_overlays(void)
+/* How far HUD elements attached to a screen edge move, in the game's HUD units.
+   The game places HUD x at x*0.99/320-1 in view space, and the view reaches
+   +-0.75*width/height, so the edges move by (0.75*width/height-1)*320/0.99,
+   which is 0 at 4:3. */
+static int hud_shift(int width, int height)
+{
+	int numerator = (3 * width - 4 * height) * 8000;
+	int denominator = 99 * height;
+
+	if (numerator < 0)
+		return (numerator - denominator / 2) / denominator;
+	return (numerator + denominator / 2) / denominator;
+}
+
+static BOOL has_prefix(const char *text, const char *prefix)
+{
+	while (*prefix) {
+		char a = *text++, b = *prefix++;
+
+		if (a >= 'a' && a <= 'z')
+			a = (char)(a - 32);
+		if (a != b)
+			return FALSE;
+	}
+	return TRUE;
+}
+
+/* Which screen edge a HUD element is attached to: -1 left, 1 right, 0 for elements
+   that stay centered or that the game places itself. */
+static int hud_edge(const char *section, const char *parent)
+{
+	if (lstrcmpiA(parent, "Speedometer") == 0 || lstrcmpiA(section, "STRING_RACE_TIME_VALUE") == 0 ||
+			lstrcmpiA(section, "STRING_CUR_LAP") == 0 || lstrcmpiA(section, "STRING_CUR_POS") == 0)
+		return 1;
+	if (lstrcmpiA(parent, "Communicator") == 0 || has_prefix(section, "OVL_PORTRAITS_") ||
+			has_prefix(section, "PLAYER_"))
+		return -1;
+	return 0;
+}
+
+/* Reads one line of an overlay file: its section name if it starts a section,
+   otherwise its key in lower case and where its value starts. */
+static void ini_line(const char *line, int size, char *section, char *key, int *value_start)
+{
+	int end = 0, i, start, length;
+
+	section[0] = key[0] = 0;
+	*value_start = 0;
+
+	while (end < size && line[end] != ';')
+		end++;
+
+	for (start = 0; start < end && is_space(line[start]); start++)
+		;
+	if (start < end && line[start] == '[') {
+		length = 0;
+		for (i = start + 1; i < end && line[i] != ']' && length < 99; i++)
+			section[length++] = line[i];
+		section[i < end && line[i] == ']' ? length : 0] = 0;
+		return;
+	}
+
+	for (i = start; i < end && line[i] != '='; i++)
+		;
+	if (i >= end)
+		return;
+
+	length = i;
+	while (length > start && is_space(line[length - 1]))
+		length--;
+	if (length - start < 20) {
+		int k;
+
+		for (k = 0; k < length - start; k++) {
+			char c = line[start + k];
+
+			key[k] = (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c;
+		}
+		key[length - start] = 0;
+	}
+
+	i++;
+	while (i < end && (line[i] == ' ' || line[i] == '\t'))
+		i++;
+	*value_start = i;
+}
+
+/* Adds shift to the number at the start of value, which may have up to three
+   decimals. Writes the new number and returns how long the old one was, or 0. */
+static int shift_decimal(const char *value, int size, int shift, char *text)
+{
+	int i = 0, whole = 0, milli, start, unit = 100;
+	BOOL negative = size > 0 && value[0] == '-';
+
+	if (negative)
+		i++;
+	start = i;
+	while (i < size && value[i] >= '0' && value[i] <= '9' && whole <= 1000000)
+		whole = whole * 10 + (value[i++] - '0');
+	if (i == start || whole > 1000000)
+		return 0;
+
+	milli = whole * 1000;
+	if (i < size && value[i] == '.') {
+		i++;
+		for (; i < size && value[i] >= '0' && value[i] <= '9'; i++) {
+			if (unit == 0)
+				return 0;
+			milli += (value[i] - '0') * unit;
+			unit /= 10;
+		}
+	}
+	if (negative)
+		milli = -milli;
+	milli += shift * 1000;
+
+	if (milli < 0) {
+		*text++ = '-';
+		milli = -milli;
+	}
+	text += wsprintfA(text, "%d", milli / 1000);
+	if (milli % 1000 != 0) {
+		int fraction = milli % 1000;
+
+		*text++ = '.';
+		*text++ = (char)('0' + fraction / 100);
+		if (fraction % 100 != 0) {
+			*text++ = (char)('0' + fraction / 10 % 10);
+			if (fraction % 10 != 0)
+				*text++ = (char)('0' + fraction % 10);
+		}
+	}
+	*text = 0;
+	return i;
+}
+
+static int line_size(const char *data, DWORD left)
+{
+	DWORD i = 0;
+
+	while (i < left && data[i] != '\n')
+		i++;
+	return (int)(i < left ? i + 1 : i);
+}
+
+/* Fills in the Parent of the section a Position line belongs to: it can come
+   before or after that line, so look through the whole section. */
+static void section_parent(const char *start, const char *end, char *parent)
+{
+	static char section[100], key[20];
+	const char *line = start;
+	int value_start;
+
+	parent[0] = 0;
+	while (line < end) {
+		int size = line_size(line, (DWORD)(end - line));
+
+		ini_line(line, size, section, key, &value_start);
+		if (line != start && section[0] != 0)
+			return;
+		if (lstrcmpA(key, "parent") == 0) {
+			int length = 0;
+
+			while (value_start + length < size && length < 99 && !is_space(line[value_start + length]) &&
+					line[value_start + length] != ';') {
+				parent[length] = line[value_start + length];
+				length++;
+			}
+			parent[length] = 0;
+		}
+		line += size;
+	}
+}
+
+/* Writes an original overlay file with every element that is attached to a screen
+   edge moved to that edge for the chosen resolution. The rest stays as it is, so
+   the HUD keeps its original size. The result is allocated here. */
+static char *transform_overlay(const char *data, DWORD size, int shift, DWORD *result_size)
+{
+	static char section[100], current[100], key[20], parent[100], number[32];
+	const char *line = data;
+	const char *end = data + size;
+	char *result = HeapAlloc(GetProcessHeap(), 0, size * 2 + 16);
+	char *to = result;
+
+	current[0] = parent[0] = 0;
+	if (result == NULL)
+		return NULL;
+
+	while (line < end) {
+		int length = line_size(line, (DWORD)(end - line));
+		int value_start, old_size = 0;
+
+		ini_line(line, length, section, key, &value_start);
+		if (section[0] != 0) {
+			lstrcpyA(current, section);
+			section_parent(line, end, parent);
+		} else if (lstrcmpA(key, "position") == 0) {
+			int edge = hud_edge(current, parent);
+
+			if (edge != 0)
+				old_size = shift_decimal(line + value_start, length - value_start, edge * shift, number);
+		}
+
+		if (old_size > 0) {
+			memcpy(to, line, value_start);
+			to += value_start;
+			memcpy(to, number, lstrlenA(number));
+			to += lstrlenA(number);
+			memcpy(to, line + value_start + old_size, length - value_start - old_size);
+			to += length - value_start - old_size;
+		} else {
+			memcpy(to, line, length);
+			to += length;
+		}
+		line += length;
+	}
+
+	*result_size = (DWORD)(to - result);
+	return result;
+}
+
+/* Recognizes the game's own HUD layout. Moving a file that an earlier patcher or
+   a hand tuned HUD already changed would give a wrong result. */
+static BOOL is_original_overlay(const char *data, DWORD size)
+{
+	static char section[100], current[100], key[20];
+	const char *line = data;
+	const char *end = data + size;
+	int found = 0;
+
+	current[0] = 0;
+	while (line < end) {
+		int length = line_size(line, (DWORD)(end - line));
+		int value_start;
+
+		ini_line(line, length, section, key, &value_start);
+		if (section[0] != 0) {
+			lstrcpyA(current, section);
+		} else if (lstrcmpA(key, "position") == 0) {
+			const char *value = line + value_start;
+
+			if (lstrcmpiA(current, "OVL_SPEEDOMETER_BODY") == 0) {
+				if (length - value_start < 4 || !same_bytes(value, "640,", 4))
+					return FALSE;
+				found++;
+			} else if (lstrcmpiA(current, "OVL_COMMUNICATOR_BODY") == 0) {
+				if (length - value_start < 2 || !same_bytes(value, "0,", 2))
+					return FALSE;
+				found++;
+			}
+		}
+		line += length;
+	}
+	return found == 2;
+}
+
+/* Finds the game's own version of an overlay file. The first backup holds it after
+   an earlier run, otherwise it is still in the game folder. */
+static char *original_overlay(const char *name, DWORD *size)
+{
+	static char dir[PATH_SIZE], path[PATH_SIZE];
+	char *data;
+	BOOL has_backup, exists;
+
+	join_path(dir, game_dir, BACKUP_DIR);
+	has_backup = find_file(dir, name, path);
+	if (has_backup) {
+		data = read_file(path, size);
+		if (data == NULL) {
+			FAIL("could not read %s: %s", path, system_error());
+			return NULL;
+		}
+		if (is_original_overlay(data, *size))
+			return data;
+		HeapFree(GetProcessHeap(), 0, data);
+	}
+
+	exists = find_file(game_dir, name, path);
+	if (exists) {
+		data = read_file(path, size);
+		if (data == NULL) {
+			FAIL("could not read %s: %s", path, system_error());
+			return NULL;
+		}
+		if (is_original_overlay(data, *size))
+			return data;
+		HeapFree(GetProcessHeap(), 0, data);
+	}
+
+	if (!has_backup && !exists)
+		FAIL("there is no %s in %s", name, game_dir);
+	else
+		FAIL("no original %s found: it was changed by an older HUD fix. Restore it from the game CD and run the patcher again", name);
+	return NULL;
+}
+
+/* Writes the HUD overlay files for the chosen resolution, made from the game's own
+   files, and moves the files they replace to the backup folder. overlay7.ini comes
+   with the "Schaduw" extra car update, which would overwrite it again, so it is
+   only written when that update is already installed. */
+static BOOL install_overlays(int width, int height)
 {
 	static char target[PATH_SIZE];
 	static char backup_path[PATH_SIZE];
+	int shift = hud_shift(width, height);
 	unsigned int i;
 
-	for (i = 0; i < sizeof(overlays) / sizeof(overlays[0]); i++) {
-		const char *name = overlays[i].name;
-		const char *data = overlays[i].start;
-		DWORD size = (DWORD)(overlays[i].end - overlays[i].start);
+	for (i = 0; i < sizeof(overlay_names) / sizeof(overlay_names[0]); i++) {
+		const char *name = overlay_names[i];
 		BOOL exists = find_file(game_dir, name, target);
+		char *original, *data;
+		DWORD original_size, size;
 
 		if (!exists && lstrcmpA(name, EXTRA_CAR_OVERLAY) == 0) {
 			SAY("Skipped %s: the \"Schaduw\" extra car update is not installed.\r\n", name);
 			say("  Install that update first, then run the patcher again.\r\n");
 			continue;
 		}
+
+		original = original_overlay(name, &original_size);
+		if (original == NULL)
+			return FALSE;
+		data = transform_overlay(original, original_size, shift, &size);
+		HeapFree(GetProcessHeap(), 0, original);
+		if (data == NULL)
+			return FAIL("not enough memory for %s", name);
 
 		backup_path[0] = 0;
 		if (exists) {
@@ -598,6 +932,7 @@ static BOOL install_overlays(void)
 			HeapFree(GetProcessHeap(), 0, current);
 			if (same) {
 				SAY("%s is already up to date.\r\n", name);
+				HeapFree(GetProcessHeap(), 0, data);
 				continue;
 			}
 
@@ -618,10 +953,86 @@ static BOOL install_overlays(void)
 			return FAIL("could not write %s: %s", name, earlier());
 		}
 
+		HeapFree(GetProcessHeap(), 0, data);
 		SAY("Installed %s\r\n", name);
 	}
 
 	return TRUE;
+}
+
+/* Refuses to continue without administrator rights, which are needed to write into
+   C:\Program Files. The manifest makes Windows Vista and newer ask for them; this
+   catches the cases where that request is bypassed, and Windows XP, which ignores
+   it. It checks for an enabled Administrators group: tokens that only carry it as
+   "deny only" cannot write there. Windows 9x has no such rights, and on systems
+   without these functions a write that fails is still reported. */
+static BOOL check_admin(void)
+{
+	typedef BOOL (WINAPI *allocate_sid_fn)(PSID_IDENTIFIER_AUTHORITY, BYTE, DWORD, DWORD,
+		DWORD, DWORD, DWORD, DWORD, DWORD, DWORD, PSID *);
+	typedef BOOL (WINAPI *check_membership_fn)(HANDLE, PSID, PBOOL);
+	typedef PVOID (WINAPI *free_sid_fn)(PSID);
+
+	static char path[MAX_PATH + 32];
+	static SID_IDENTIFIER_AUTHORITY nt_authority = {SECURITY_NT_AUTHORITY};
+	allocate_sid_fn allocate_sid;
+	check_membership_fn check_membership;
+	free_sid_fn free_sid;
+	HMODULE advapi;
+	PSID administrators;
+	BOOL member = FALSE;
+	BOOL checked;
+	UINT size;
+
+	if (GetVersion() & 0x80000000)
+		return TRUE;
+
+	/* From the system folder only, because this runs with administrator rights
+	   and a stray DLL next to the patcher must not be loaded. */
+	size = GetSystemDirectoryA(path, MAX_PATH);
+	if (size == 0 || size >= MAX_PATH)
+		return TRUE;
+	lstrcatA(path, "\\advapi32.dll");
+	advapi = LoadLibraryA(path);
+	if (advapi == NULL)
+		return TRUE;
+
+	allocate_sid = (allocate_sid_fn)GetProcAddress(advapi, "AllocateAndInitializeSid");
+	check_membership = (check_membership_fn)GetProcAddress(advapi, "CheckTokenMembership");
+	free_sid = (free_sid_fn)GetProcAddress(advapi, "FreeSid");
+	if (allocate_sid == NULL || check_membership == NULL || free_sid == NULL)
+		return TRUE;
+
+	if (!allocate_sid(&nt_authority, 2, SECURITY_BUILTIN_DOMAIN_RID, DOMAIN_ALIAS_RID_ADMINS,
+			0, 0, 0, 0, 0, 0, &administrators))
+		return FAIL("%s", system_error());
+
+	checked = check_membership(NULL, administrators, &member);
+	if (!checked) {
+		FAIL("%s", system_error());
+		free_sid(administrators);
+		return FALSE;
+	}
+	free_sid(administrators);
+
+	if (!member)
+		return FAIL("the patcher needs administrator rights to write the game files. Right-click it and choose \"Run as administrator\" (\"Run as...\" on Windows XP)");
+
+	return TRUE;
+}
+
+/* Reports whether the patcher is alone in its console, as when it is started from
+   Explorer: that window closes as soon as the patcher exits. Windows 9x cannot tell,
+   so it counts as alone there. */
+static BOOL console_will_close(void)
+{
+	typedef DWORD (WINAPI *process_list_fn)(LPDWORD, DWORD);
+
+	process_list_fn process_list = (process_list_fn)GetProcAddress(
+		GetModuleHandleA("kernel32.dll"), "GetConsoleProcessList");
+	DWORD ids[2];
+
+	return process_list == NULL || process_list(ids, 2) == 1;
 }
 
 /* Does the actual work. Every failure is reported, together with what it means
@@ -633,10 +1044,8 @@ static BOOL run(void)
 	say("A2 Racer 4 Widescreen Patcher v" PATCHER_VERSION "\r\n");
 	say("--------------------------------\r\n\r\n");
 
-	/* Newer Windows has administrator rights and redirected writes, which only
-	   the other Windows versions of the patcher deal with. */
-	if (!(GetVersion() & 0x80000000)) {
-		say("Error: this version is for Windows 95, 98 and Me. Use A2Racer4WidescreenPatcher_32bit.exe\r\n");
+	if (!check_admin()) {
+		SAY("Error: %s\r\n", error);
 		say("Nothing was changed.\r\n");
 		return FALSE;
 	}
@@ -656,7 +1065,7 @@ static BOOL run(void)
 	SAY("Created patched " GAME_FILE " for %dx%d.\r\n", width, height);
 	say("The texture memory crash fix for modern graphics cards is included.\r\n\r\n");
 
-	if (!install_overlays()) {
+	if (!install_overlays(width, height)) {
 		SAY("\r\nCopying the HUD files failed: %s\r\n", error);
 		say(GAME_FILE " is patched, but not every HUD file was installed.\r\n");
 		say("Fix the problem and run the patcher again.\r\n");
@@ -681,9 +1090,8 @@ void __stdcall start(void)
 
 	ok = run();
 
-	/* Windows 9x cannot tell whether this console closes with the patcher, so
-	   always keep the result readable. */
-	if (GetFileType(input) == FILE_TYPE_CHAR) {
+	/* Keep the result readable when the console closes with the patcher. */
+	if (GetFileType(input) == FILE_TYPE_CHAR && console_will_close()) {
 		say("\r\nPress Enter to close.");
 		read_line(line, sizeof(line));
 	}
