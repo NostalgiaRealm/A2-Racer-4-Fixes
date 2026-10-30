@@ -3,6 +3,7 @@
 This folder contains the Go source code for the patcher, `A2Racer4WidescreenPatcher`. Build the whole folder (`.`), not a single `.go` file:
 - the patched HUD files in `overlays/` are built in with `go:embed` (`overlays_embed.go`), or as generated code for Go 1.10 (`gen_overlays_legacy.go`);
 - `admin_windows.go` and `admin_other.go` hold the platform-specific parts;
+- `win9x/` holds the separate C version for Windows 95, 98 and Me, which Go cannot target;
 - `rsrc_windows_amd64.syso` and `rsrc_windows_386.syso` add the Windows manifest that asks for administrator rights.
 
 ## Build on Windows
@@ -54,6 +55,18 @@ GOOS=linux GOARCH=386 GO386=softfloat CGO_ENABLED=0 go build -trimpath -ldflags=
 `GO386=387` and `GO386=softfloat` mean these versions need MMX but not SSE2, so they also run on older 32-bit processors. Current Go versions build Linux binaries that need Linux 3.2 or newer.
 
 Release binaries are built from a clean git checkout of the tagged commit: the 32-bit Windows version with Go 1.10.8 from go.dev plus `go110_runtime_dll_fix.diff`, the others with Fedora 44's Go 1.26.10 package (`go version` prints `go1.26.10-X:nodwarf5`). Go 1.26 stamps the commit and whether the checkout is clean into the binary; `.gitignore` keeps the files built above from counting as changes. These steps give byte-identical files. Go 1.26.10 built from the upstream source does too, with `GOEXPERIMENT=nodwarf5` set.
+
+## Compile the Windows 95, 98 and Me version
+
+Go has never supported Windows 9x, so `win9x/A2Racer4WidescreenPatcher_win9x.c` is a separate program with the same patches, overlay files and messages. It only uses functions that exist since Windows 95, and no C runtime. Any change to the patcher has to go into both versions, and their output has to be compared before a release.
+
+Build it from this folder with `i686-w64-mingw32-clang` from llvm-mingw. Release binaries use llvm-mingw 20261006:
+
+```bash
+i686-w64-mingw32-clang -march=i486 -Os -nostdlib -ffreestanding -fno-builtin -fno-stack-protector -fno-asynchronous-unwind-tables -mno-stack-arg-probe win9x/A2Racer4WidescreenPatcher_win9x.c -o A2Racer4WidescreenPatcher_win9x.exe -lkernel32 -luser32 -s -Wl,-e,_start@0 -Wl,--subsystem,console:4.0 -Wl,--major-os-version=4 -Wl,--minor-os-version=0 -Wl,--disable-dynamicbase -Wl,--disable-nxcompat -Wl,--disable-tsaware -Wl,--no-insert-timestamp
+```
+
+The overlay files are built in with `.incbin`, so run it where `overlays/` is. There is no manifest, because Windows 9x has no administrator rights. To stop it writing into redirected folders on newer Windows, it refuses to run there.
 
 ## Windows manifest
 

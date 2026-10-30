@@ -5,7 +5,7 @@ This package contains a native 16:9 widescreen fix for the PC version of **A2 Ra
 The fix has three parts:
 
 1. a patched `spel.dat` executable module that makes the 3D game render correctly at a 16:9 resolution without horizontal stretching, and that fixes the crash at race start on modern graphics cards;
-2. An automatic patcher called `A2Racer4WidescreenPatcher`, for 64-bit and 32-bit Windows and Linux, that patches `spel.dat` and installs the overlay files in the game folder you choose.
+2. An automatic patcher called `A2Racer4WidescreenPatcher`, for 64-bit and 32-bit Windows and Linux and for Windows 95, 98 and Me, that patches `spel.dat` and installs the overlay files in the game folder you choose.
 3. patched `overlay*.ini` files that reposition and unstretch the in-game HUD for a 16:9 layout.
 
 The game uses `spel.dat` as the executable module for the DirectDraw/Direct3D racing portion of the game, even though the file extension is `.dat`.
@@ -31,17 +31,18 @@ Using only one part of the fix is not recommended.
 
 ### `A2Racer4WidescreenPatcher` (Windows and Linux, 64-bit and 32-bit)
 
-The automatic patcher. Download the version for your system (since v1.0.8 the 32-bit Windows version also runs on Windows XP, Vista, 7, 8 and 8.1):
+The automatic patcher. Download the version for your system (since v1.0.8 the 32-bit Windows version also runs on Windows XP, Vista, 7, 8 and 8.1, and since v1.0.9 there is a version for Windows 95, 98 and Me):
 
 | System | Download |
 |---|---|
 | Windows 10 or 11, 64-bit | `A2Racer4WidescreenPatcher.exe` |
 | Windows XP, Vista, 7, 8, 8.1 or 10, 32-bit | `A2Racer4WidescreenPatcher_32bit.exe` |
 | Windows XP, Vista, 7, 8 or 8.1, 64-bit | `A2Racer4WidescreenPatcher_32bit.exe` |
+| Windows 95, 98 or Me | `A2Racer4WidescreenPatcher_win9x.exe` |
 | Linux, 64-bit | `A2Racer4WidescreenPatcher_linux_x86_64` |
 | Linux, 32-bit | `A2Racer4WidescreenPatcher_linux_32bit` |
 
-The 64-bit versions do not start on a 32-bit system. All four write exactly the same files.
+The 64-bit versions do not start on a 32-bit system. All five write exactly the same files.
 
 On Linux, use a Linux version, also when the game runs in Wine. Open a terminal, make the file executable and start it (the 64-bit file works the same way):
 
@@ -78,9 +79,11 @@ You can type or paste the path, with or without quotes. On Linux, `~` and escape
 
 `overlay7.ini` is only installed when the "Schaduw" extra car update is present, because that update brings its own copy. Install the update first, then run the patcher.
 
-`A2Racer4WidescreenPatcher.exe` needs Windows 10 or newer, so on older 64-bit Windows use the 32-bit version. That one needs Windows XP with Service Pack 3 or newer. Service Pack 2 is untested, and Microsoft documents that programs with a manifest like this one can make an unpatched SP2 restart, so update to SP3 first, or install hotfixes KB921337 and KB943232. On anything older, patch `spel.dat` by hand with the steps in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#manual-patching-on-windows), or run the patcher on another PC and copy the patched `spel.dat` and overlay `.ini` files over.
+`A2Racer4WidescreenPatcher.exe` needs Windows 10 or newer, so on older 64-bit Windows use the 32-bit version. That one needs Windows XP with Service Pack 3 or newer. Service Pack 2 is untested, and Microsoft documents that programs with a manifest like this one can make an unpatched SP2 restart, so update to SP3 first, or install hotfixes KB921337 and KB943232. On Windows 2000, patch `spel.dat` by hand with the steps in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#manual-patching-on-windows), or run the patcher on another PC and copy the patched `spel.dat` and overlay `.ini` files over.
 
-Both 32-bit versions need a processor with MMX but not SSE2, so they also run on a Pentium III or Athlon XP. The 32-bit Linux version needs Linux 3.2 or newer.
+`A2Racer4WidescreenPatcher_win9x.exe` is only for Windows 95, 98 and Me, and refuses to run on newer Windows. Those systems have no administrator rights to ask for. The game can only use a resolution your graphics driver offers, so on an old PC choose a 16:9 mode that is listed in your display settings.
+
+The two other 32-bit versions need a processor with MMX but not SSE2, so they also run on a Pentium III or Athlon XP. The 32-bit Linux version needs Linux 3.2 or newer.
 
 ### `A2Racer4_DashboardFix`
 
@@ -99,7 +102,7 @@ overlay7.ini
 
 `overlay7.ini` is for the "Schaduw" extra car update. Install that update first, then copy the overlay files.
 
-Since v1.0.5 the patcher installs these files for you. The zip is for installing them by hand, for example on Windows 98 or 2000.
+Since v1.0.5 the patcher installs these files for you. The zip is for installing them by hand, for example on Windows 2000.
 
 Extract these files into the same folder where the original overlay `.ini` files are located. Back up the originals first.
 
@@ -323,7 +326,7 @@ This strongly suggests the game assigns finish-result positions dynamically at r
 
 3. Start the racing part of the game normally.
 
-To install by hand instead, for example on Windows 98 or 2000: back up `spel.dat` and the overlay `.ini` files, patch `spel.dat` with the steps in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#manual-patching-on-windows), and copy the files from `A2Racer4_DashboardFix.zip` into the game folder.
+To install by hand instead, for example on Windows 2000: back up `spel.dat` and the overlay `.ini` files, patch `spel.dat` with the steps in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#manual-patching-on-windows), and copy the files from `A2Racer4_DashboardFix.zip` into the game folder.
 
 ## Playing from a disc image
 
@@ -345,3 +348,4 @@ Making the image requires the original disc. Tools such as ImgBurn (Windows) or 
 - The v1.0.4 crash fix was tested on Fedora Linux 44 with plain Wine 11.19, D7VK v2.4, and dgVoodoo 2.80 with `VRAM = 256` (which crashes without the fix). It hasn't been tested on Windows yet.
 - The 32-bit patchers were tested on 64-bit Fedora Linux 44: the Linux version directly, the Windows version under Wine 11.20. They wrote the same files as the 64-bit patchers. The Linux version also ran on a 32-bit Linux 3.18 kernel in QEMU, on emulated Pentium III and Athlon processors without SSE2. They haven't been tested on a real 32-bit PC or on actual 32-bit Windows yet.
 - The v1.0.8 32-bit Windows version is built with Go 1.10, the last Go release that runs on Windows XP. It was tested in the Windows PE environment on Microsoft's Windows Embedded POSReady 2009 disc in a VM, which is XP SP3 code but not a full desktop installation, also on emulated Pentium MMX, Pentium III and Athlon processors without SSE2. It and the 64-bit version were also tested on 64-bit Windows 10 LTSC 2021 in a VM, including the administrator prompt. Windows XP SP2, XP x64, Vista, 7, 8, 8.1 and actual 32-bit Windows 10 rest on Go's documentation and haven't been tested yet.
+- The v1.0.9 Windows 95, 98 and Me version was tested on Windows 98 SE in a VM, on an installed copy of the game, and under Wine in Windows 98 mode, where it wrote the same files as the other patchers. It hasn't been tested on Windows 95, Windows Me or a real old PC yet, and the patched game hasn't been started on Windows 98 yet.
