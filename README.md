@@ -299,6 +299,15 @@ This strongly suggests the game assigns finish-result positions dynamically at r
 
 To install by hand instead, for example on Windows 7: back up `spel.dat` and the overlay `.ini` files, patch `spel.dat` with the steps in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#manual-patching-on-windows), and copy the files from `A2Racer4_DashboardFix.zip` into the game folder.
 
+## Playing from a disc image
+
+A2 Racer 4 expects its CD in the drive while you play. If you still have the disc but would rather not keep it in the drive, you can make an image (`.iso`) of your own disc and mount that instead. This patch does not change the game's disc check; it only means the disc is a virtual drive rather than a physical one.
+
+- **Windows 10 / 11:** right-click your `.iso` file and choose **Mount**. Windows adds it as a drive letter, and the game sees it as the CD.
+- **Lutris / Wine:** mount the `.iso` on your system first. If Wine does not show it as a drive on its own, open `winecfg` → **Drives**, add the mount point, and set its type to **CD-ROM**. All of this project's Wine testing was done this way, with drive `E:` pointing at the mounted image.
+
+Making the image requires the original disc. Tools such as ImgBurn (Windows) or `dd` / Brasero (Linux) can read a disc to an `.iso`.
+
 ## Notes
 
 - This fix was tuned for **2560×1440 16:9**. I was not able to test other resolutions yet.
