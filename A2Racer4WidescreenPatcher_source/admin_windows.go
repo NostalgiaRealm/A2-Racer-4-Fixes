@@ -27,7 +27,7 @@ func checkAdmin() error {
 	}
 
 	if member == 0 {
-		return errors.New("the patcher needs administrator rights to write the game files. Right-click it and choose \"Run as administrator\"")
+		return errors.New("the patcher needs administrator rights to write the game files. Right-click it and choose \"Run as administrator\" (\"Run as...\" on Windows XP)")
 	}
 
 	return nil

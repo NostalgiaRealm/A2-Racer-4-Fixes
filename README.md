@@ -31,12 +31,13 @@ Using only one part of the fix is not recommended.
 
 ### `A2Racer4WidescreenPatcher` (Windows and Linux, 64-bit and 32-bit)
 
-The automatic patcher. Download the version for your system (since v1.0.7 there are 32-bit versions too):
+The automatic patcher. Download the version for your system (since v1.0.8 the 32-bit Windows version also runs on Windows XP, Vista, 7, 8 and 8.1):
 
 | System | Download |
 |---|---|
 | Windows 10 or 11, 64-bit | `A2Racer4WidescreenPatcher.exe` |
-| Windows 10, 32-bit | `A2Racer4WidescreenPatcher_32bit.exe` |
+| Windows XP, Vista, 7, 8, 8.1 or 10, 32-bit | `A2Racer4WidescreenPatcher_32bit.exe` |
+| Windows XP, Vista, 7, 8 or 8.1, 64-bit | `A2Racer4WidescreenPatcher_32bit.exe` |
 | Linux, 64-bit | `A2Racer4WidescreenPatcher_linux_x86_64` |
 | Linux, 32-bit | `A2Racer4WidescreenPatcher_linux_32bit` |
 
@@ -59,7 +60,7 @@ Run it from anywhere and enter:
 
 It writes the patched `spel.dat` (including the crash fix) and copies the patched overlay `.ini` files into that folder. Every file it replaces is moved to a `4x3_backup` folder in the game folder; earlier backups are never overwritten. It refuses to patch an unknown `spel.dat` version.
 
-On Windows the patcher needs administrator rights, because the game is normally installed in `C:\Program Files (x86)`, or `C:\Program Files` on 32-bit Windows. Windows asks for them when you start it; click Yes. Without them it stops and changes nothing.
+On Windows the patcher needs administrator rights, because the game is normally installed in `C:\Program Files (x86)`, or `C:\Program Files` on 32-bit Windows. Windows asks for them when you start it; click Yes (Allow on Vista). Windows XP does not ask: use an administrator account, or right-click the patcher and choose Run as. Without administrator rights it stops and changes nothing.
 
 The patcher always shows the result. That includes any file it could not write and what that means for your game files. On Windows the window stays open until you press Enter.
 
@@ -77,9 +78,9 @@ You can type or paste the path, with or without quotes. On Linux, `~` and escape
 
 `overlay7.ini` is only installed when the "Schaduw" extra car update is present, because that update brings its own copy. Install the update first, then run the patcher.
 
-Both Windows versions need Windows 10 or newer. On anything older, 32-bit editions included, they do not start or they close immediately. There, patch `spel.dat` by hand with the steps in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#manual-patching-on-windows), or run the patcher on another PC and copy the patched `spel.dat` and overlay `.ini` files over.
+`A2Racer4WidescreenPatcher.exe` needs Windows 10 or newer, so on older 64-bit Windows use the 32-bit version. That one needs Windows XP with Service Pack 3 or newer. Service Pack 2 is untested, and Microsoft documents that programs with a manifest like this one can make an unpatched SP2 restart, so update to SP3 first, or install hotfixes KB921337 and KB943232. On anything older, patch `spel.dat` by hand with the steps in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#manual-patching-on-windows), or run the patcher on another PC and copy the patched `spel.dat` and overlay `.ini` files over.
 
-The 32-bit Linux version needs Linux 3.2 or newer and a processor with MMX. It does not need SSE2, so it also runs on a Pentium III or Athlon XP.
+Both 32-bit versions need a processor with MMX but not SSE2, so they also run on a Pentium III or Athlon XP. The 32-bit Linux version needs Linux 3.2 or newer.
 
 ### `A2Racer4_DashboardFix`
 
@@ -98,7 +99,7 @@ overlay7.ini
 
 `overlay7.ini` is for the "Schaduw" extra car update. Install that update first, then copy the overlay files.
 
-Since v1.0.5 the patcher installs these files for you. The zip is for installing them by hand, for example on Windows 7.
+Since v1.0.5 the patcher installs these files for you. The zip is for installing them by hand, for example on Windows 98 or 2000.
 
 Extract these files into the same folder where the original overlay `.ini` files are located. Back up the originals first.
 
@@ -322,13 +323,13 @@ This strongly suggests the game assigns finish-result positions dynamically at r
 
 3. Start the racing part of the game normally.
 
-To install by hand instead, for example on Windows 7: back up `spel.dat` and the overlay `.ini` files, patch `spel.dat` with the steps in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#manual-patching-on-windows), and copy the files from `A2Racer4_DashboardFix.zip` into the game folder.
+To install by hand instead, for example on Windows 98 or 2000: back up `spel.dat` and the overlay `.ini` files, patch `spel.dat` with the steps in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#manual-patching-on-windows), and copy the files from `A2Racer4_DashboardFix.zip` into the game folder.
 
 ## Playing from a disc image
 
 A2 Racer 4 expects its CD in the drive while you play. If you still have the disc but would rather not keep it in the drive, you can make an image (`.iso`) of your own disc and mount that instead. This patch does not change the game's disc check; it only means the disc is a virtual drive rather than a physical one.
 
-- **Windows 10 / 11:** right-click your `.iso` file and choose **Mount**. Windows adds it as a drive letter, and the game sees it as the CD.
+- **Windows 8 or newer:** right-click your `.iso` file and choose **Mount**. Windows adds it as a drive letter, and the game sees it as the CD. Older Windows needs a virtual drive tool.
 - **Lutris / Wine:** mount the `.iso` on your system first. If Wine does not show it as a drive on its own, open `winecfg` → **Drives**, add the mount point, and set its type to **CD-ROM**. All of this project's Wine testing was done this way, with drive `E:` pointing at the mounted image.
 
 Making the image requires the original disc. Tools such as ImgBurn (Windows) or `dd` / Brasero (Linux) can read a disc to an `.iso`.
@@ -342,4 +343,5 @@ Making the image requires the original disc. Tools such as ImgBurn (Windows) or 
 - This project does not include original game assets beyond modified configuration/executable patch files.
 - All testing was done on Fedora Linux 44 running the game through Wine using DXVK and DgVoodoo in tandem.
 - The v1.0.4 crash fix was tested on Fedora Linux 44 with plain Wine 11.19, D7VK v2.4, and dgVoodoo 2.80 with `VRAM = 256` (which crashes without the fix). It hasn't been tested on Windows yet.
-- The v1.0.7 32-bit patchers were tested on 64-bit Fedora Linux 44: the Linux version directly, the Windows version under Wine 11.20. They wrote the same files as the 64-bit patchers. The Linux version also ran on a 32-bit Linux 3.18 kernel in QEMU, on emulated Pentium III and Athlon processors without SSE2. They haven't been tested on a real 32-bit PC or on actual 32-bit Windows yet.
+- The 32-bit patchers were tested on 64-bit Fedora Linux 44: the Linux version directly, the Windows version under Wine 11.20. They wrote the same files as the 64-bit patchers. The Linux version also ran on a 32-bit Linux 3.18 kernel in QEMU, on emulated Pentium III and Athlon processors without SSE2. They haven't been tested on a real 32-bit PC or on actual 32-bit Windows yet.
+- The v1.0.8 32-bit Windows version is built with Go 1.10, the last Go release that runs on Windows XP. It was tested in the Windows PE environment on Microsoft's Windows Embedded POSReady 2009 disc in a VM, which is XP SP3 code but not a full desktop installation, also on emulated Pentium MMX, Pentium III and Athlon processors without SSE2. It and the 64-bit version were also tested on 64-bit Windows 10 LTSC 2021 in a VM, including the administrator prompt. Windows XP SP2, XP x64, Vista, 7, 8, 8.1 and actual 32-bit Windows 10 rest on Go's documentation and haven't been tested yet.

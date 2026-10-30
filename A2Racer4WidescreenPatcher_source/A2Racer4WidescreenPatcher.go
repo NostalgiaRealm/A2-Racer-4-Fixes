@@ -3,29 +3,30 @@ package main
 import (
 	"bufio"
 	"bytes"
-	"embed"
 	"encoding/binary"
 	"fmt"
+	"io/ioutil"
 	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 )
 
 const (
-	patcherVersion  = "1.0.7"
+	patcherVersion  = "1.0.8"
 	gameFileName    = "spel.dat"
 	backupDir       = "4x3_backup"
 	extraCarOverlay = "overlay7.ini"
 )
 
-// Patched HUD layout files (the dashboard fix), installed next to spel.dat.
-//
-//go:embed overlays/*.ini
-var overlayFiles embed.FS
+// The 32-bit Windows version is built with Go 1.10, the last release that runs
+// on Windows XP, so this code sticks to what Go 1.10 has: ioutil and %v instead
+// of their newer replacements. The patched HUD files reach overlayNames and
+// overlayData through overlays_embed.go or, for Go 1.10, gen_overlays_legacy.go.
 
 var widthOffsets = []int{
 	0x1B3798,
@@ -203,13 +204,13 @@ func defaultGameDir() string {
 // writeVerified writes data and reads it back, so a write that silently did
 // not happen, for example because a virus scanner undid it, is reported.
 func writeVerified(path string, data []byte) error {
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	if err := ioutil.WriteFile(path, data, 0644); err != nil {
 		return err
 	}
 
-	written, err := os.ReadFile(path)
+	written, err := ioutil.ReadFile(path)
 	if err != nil {
-		return fmt.Errorf("could not read %s back after writing: %w", path, err)
+		return fmt.Errorf("could not read %s back after writing: %v", path, err)
 	}
 
 	if !bytes.Equal(written, data) {
@@ -229,7 +230,7 @@ func cleanPath(input string) string {
 	}
 
 	if path == "~" || strings.HasPrefix(path, "~/") {
-		if home, err := os.UserHomeDir(); err == nil {
+		if home := userHomeDir(); home != "" {
 			path = filepath.Join(home, path[1:])
 		}
 	}
@@ -241,14 +242,31 @@ func cleanPath(input string) string {
 	return filepath.Clean(path)
 }
 
+// userHomeDir returns the home folder, or "" when it is unknown.
+func userHomeDir() string {
+	if runtime.GOOS == "windows" {
+		return os.Getenv("USERPROFILE")
+	}
+
+	return os.Getenv("HOME")
+}
+
 // findFile looks up name in dir ignoring case, so SPEL.DAT is found as well
-// on case-sensitive Linux file systems.
+// on case-sensitive Linux file systems. It only stats the matching name, so one
+// unreadable file elsewhere in the folder cannot hide spel.dat.
 func findFile(dir string, name string) (string, bool) {
-	entries, err := os.ReadDir(dir)
-	if err == nil {
-		for _, entry := range entries {
-			if !entry.IsDir() && strings.EqualFold(entry.Name(), name) {
-				return filepath.Join(dir, entry.Name()), true
+	if f, err := os.Open(dir); err == nil {
+		names, err := f.Readdirnames(-1)
+		f.Close()
+		if err == nil {
+			sort.Strings(names)
+			for _, entry := range names {
+				if strings.EqualFold(entry, name) {
+					path := filepath.Join(dir, entry)
+					if info, err := os.Lstat(path); err != nil || !info.IsDir() {
+						return path, true
+					}
+				}
 			}
 		}
 	}
@@ -261,7 +279,7 @@ func findFile(dir string, name string) (string, bool) {
 func backupPathFor(gameDir string, name string) (string, error) {
 	dir := filepath.Join(gameDir, backupDir)
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		return "", fmt.Errorf("could not create %s folder: %w", backupDir, err)
+		return "", fmt.Errorf("could not create %s folder: %v", backupDir, err)
 	}
 
 	path := filepath.Join(dir, name)
@@ -319,12 +337,12 @@ func patchInPlace(gameDir string, width int, height int) error {
 
 	// Everything up to moving the original happens before spel.dat is touched.
 	unchanged := func(err error) error {
-		return fmt.Errorf("%w. Nothing was changed", err)
+		return fmt.Errorf("%v. Nothing was changed", err)
 	}
 
-	data, err := os.ReadFile(inputPath)
+	data, err := ioutil.ReadFile(inputPath)
 	if err != nil {
-		return unchanged(fmt.Errorf("could not read %s: %w", gameFileName, err))
+		return unchanged(fmt.Errorf("could not read %s: %v", gameFileName, err))
 	}
 
 	if len(data) < 0x1B3932 {
@@ -348,15 +366,15 @@ func patchInPlace(gameDir string, width int, height int) error {
 	}
 
 	if err := os.Rename(inputPath, backupPath); err != nil {
-		return unchanged(fmt.Errorf("could not move original %s to %s: %w", gameFileName, backupPath, err))
+		return unchanged(fmt.Errorf("could not move original %s to %s: %v", gameFileName, backupPath, err))
 	}
 
 	if err := writeVerified(inputPath, patched); err != nil {
 		// Try to restore the original if writing fails.
 		if restoreErr := os.Rename(backupPath, inputPath); restoreErr != nil {
-			return fmt.Errorf("could not write patched %s: %w. The original is still in %s", gameFileName, err, backupPath)
+			return fmt.Errorf("could not write patched %s: %v. The original is still in %s", gameFileName, err, backupPath)
 		}
-		return fmt.Errorf("could not write patched %s: %w. The original %s was put back", gameFileName, err, gameFileName)
+		return fmt.Errorf("could not write patched %s: %v. The original %s was put back", gameFileName, err, gameFileName)
 	}
 
 	return nil
@@ -367,15 +385,13 @@ func patchInPlace(gameDir string, width int, height int) error {
 // with the "Schaduw" extra car update, which would overwrite it again, so it
 // is only replaced when that update is already installed.
 func installOverlays(gameDir string) error {
-	entries, err := overlayFiles.ReadDir("overlays")
+	names, err := overlayNames()
 	if err != nil {
 		return err
 	}
 
-	for _, entry := range entries {
-		name := entry.Name()
-
-		data, err := overlayFiles.ReadFile("overlays/" + name)
+	for _, name := range names {
+		data, err := overlayData(name)
 		if err != nil {
 			return err
 		}
@@ -390,9 +406,9 @@ func installOverlays(gameDir string) error {
 
 		backupPath := ""
 		if exists {
-			current, err := os.ReadFile(target)
+			current, err := ioutil.ReadFile(target)
 			if err != nil {
-				return fmt.Errorf("could not read %s: %w", target, err)
+				return fmt.Errorf("could not read %s: %v", target, err)
 			}
 
 			if bytes.Equal(current, data) {
@@ -406,7 +422,7 @@ func installOverlays(gameDir string) error {
 			}
 
 			if err := os.Rename(target, backupPath); err != nil {
-				return fmt.Errorf("could not move original %s to %s: %w", name, backupPath, err)
+				return fmt.Errorf("could not move original %s to %s: %v", name, backupPath, err)
 			}
 		}
 
@@ -414,10 +430,10 @@ func installOverlays(gameDir string) error {
 			// Try to restore the original if writing fails.
 			if backupPath != "" {
 				if restoreErr := os.Rename(backupPath, target); restoreErr != nil {
-					return fmt.Errorf("could not write %s: %w. The original is still in %s", name, err, backupPath)
+					return fmt.Errorf("could not write %s: %v. The original is still in %s", name, err, backupPath)
 				}
 			}
-			return fmt.Errorf("could not write %s: %w", name, err)
+			return fmt.Errorf("could not write %s: %v", name, err)
 		}
 
 		fmt.Printf("Installed %s\n", name)
