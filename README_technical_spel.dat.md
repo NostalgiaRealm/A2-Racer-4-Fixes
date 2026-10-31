@@ -37,7 +37,6 @@ Examples:
 ```text
 file offset 0x0C0E57 -> VA 0x004C0E57
 file offset 0x1B3798 -> VA 0x005B3798
-file offset 0x1973D0 -> VA 0x005973D0
 ```
 
 ## Summary of the patch
@@ -100,7 +99,9 @@ For the correct Hor+ result, the calculation is redirected to use a 4:3 referenc
 1440 / 1920 = 0.75
 ```
 
-So `startup` stores `(H × 4 + 1) / 3`, `1920` here, at an unused data location, VA `0x005973D0`, and the `fidiv` operand is changed to point to that value.
+So `startup` stores `(H × 4 + 1) / 3`, `1920` here, in free memory after the game's data, VA `0x00751F38`, and the `fidiv` operand is changed to point to that value.
+
+Up to v1.4.0 this value sat at `0x005973D0`, which is zero in the file and looked unused. It is a field of the game's racer table, which the game clears when the race loads, about a second after `startup` runs. Everything placed during loading was fine. The start digits are scaled every frame (`FUN_00496110`, through `FUN_0047CD90` from part 5), so from v1.1.0, when that function started using this value, they divided by 0 and the 3, 2, 1 and START were gone.
 
 ### Code redirection
 
@@ -119,13 +120,13 @@ DA 35 98 37 5B 00
 Patched instruction:
 
 ```asm
-fidiv dword ptr ds:0x005973D0
+fidiv dword ptr ds:0x00751F38
 ```
 
 Patched bytes:
 
 ```text
-DA 35 D0 73 59 00
+DA 35 38 1F 75 00
 ```
 
 This makes the game divide by the 4:3 reference width instead of the actual 16:9 output width.
@@ -232,9 +233,9 @@ On anything but 4:3 this squashes the HUD vertically. Using the 4:3 reference wi
 
 | File offset | VA | Original | Patched |
 |---|---|---|---|
-| `0x07CDD1` | `0x0047CDD1` | `DA 35 98 37 5B 00` | `DA 35 D0 73 59 00` |
-| `0x07FE55` | `0x0047FE55` | `DB 05 98 37 5B 00` | `DB 05 D0 73 59 00` |
-| `0x080534` | `0x00480534` | `DB 05 98 37 5B 00` | `DB 05 D0 73 59 00` |
+| `0x07CDD1` | `0x0047CDD1` | `DA 35 98 37 5B 00` | `DA 35 38 1F 75 00` |
+| `0x07FE55` | `0x0047FE55` | `DB 05 98 37 5B 00` | `DB 05 38 1F 75 00` |
+| `0x080534` | `0x00480534` | `DB 05 98 37 5B 00` | `DB 05 38 1F 75 00` |
 
 Horizontally, HUD `x` reaches the screen edges where `0.99 / 320 × x - 1 = ±0.75 × W / H`. Compared with 4:3 the edges move by `(0.75 × W / H - 1) × 320 / 0.99`, which is the shift for elements attached to an edge. See [Overlay files](#overlay-files).
 
@@ -458,7 +459,7 @@ FF 74 24 14 FF 74 24 14 FF 74 24 14 8B 04 24 8B 08 FF 51 30 5A 50 52 6A
 1B 54 6A FF 6A 00 FF D0 85 C0 74 10 8B 5C 24 6C 8B 6C 24 70 85 DB 74 04
 85 ED 75 14 6A 00 FF 15 F4 61 57 00 89 C3 6A 01 FF 15 F4 61 57 00 89 C5
 81 C4 9C 00 00 00 BE 3C 5B 57 00 B9 0C 00 00 00 AD 89 18 89 68 04 E2 F8
-8D 04 AD 01 00 00 00 31 D2 B9 03 00 00 00 F7 F1 A3 D0 73 59 00 61 E9 CD
+8D 04 AD 01 00 00 00 31 D2 B9 03 00 00 00 F7 F1 A3 38 1F 75 00 61 E9 CD
 29 EE FF 50 A1 98 37 5B 00 8D 04 40 50 DB 04 24 A1 9C 37 5B 00 C1 E0 02
 89 04 24 DA 34 24 58 D9 C0 D9 E0 D9 5E 14 DC C0 D9 5E 1C 58 C3 FF 74 24
 0C FF 74 24 0C FF 74 24 0C E8 22 B8 F0 FF 84 C0 74 2D 50 8B 44 24 08 8B
@@ -701,7 +702,7 @@ In the original file, look for:
 After patching, this should become:
 
 ```asm
-004c0e57: da 35 d0 73 59 00     fidiv  DWORD PTR ds:0x5973d0
+004c0e57: da 35 38 1f 75 00     fidiv  DWORD PTR ds:0x751f38
 ...
 004c0e8a: c7 46 14 ab aa aa bf  mov    DWORD PTR [esi+0x14],0xbfaaaaab   ; 16:9
 004c0e96: c7 46 1c ab aa 2a 40  mov    DWORD PTR [esi+0x1c],0x402aaaab   ; 16:9
@@ -750,7 +751,7 @@ FF 74 24 14 FF 74 24 14 FF 74 24 14 8B 04 24 8B 08 FF 51 30 5A 50 52 6A
 1B 54 6A FF 6A 00 FF D0 85 C0 74 10 8B 5C 24 6C 8B 6C 24 70 85 DB 74 04
 85 ED 75 14 6A 00 FF 15 F4 61 57 00 89 C3 6A 01 FF 15 F4 61 57 00 89 C5
 81 C4 9C 00 00 00 BE 3C 5B 57 00 B9 0C 00 00 00 AD 89 18 89 68 04 E2 F8
-8D 04 AD 01 00 00 00 31 D2 B9 03 00 00 00 F7 F1 A3 D0 73 59 00 61 E9 CD
+8D 04 AD 01 00 00 00 31 D2 B9 03 00 00 00 F7 F1 A3 38 1F 75 00 61 E9 CD
 29 EE FF 50 A1 98 37 5B 00 8D 04 40 50 DB 04 24 A1 9C 37 5B 00 C1 E0 02
 89 04 24 DA 34 24 58 D9 C0 D9 E0 D9 5E 14 DC C0 D9 5E 1C 58 C3 FF 74 24
 0C FF 74 24 0C FF 74 24 0C E8 22 B8 F0 FF 84 C0 74 2D 50 8B 44 24 08 8B
@@ -853,10 +854,10 @@ for offset, old, new in [
     (0x0001F8, "4A 44 17 00", "00 50 17 00"),
     (0x0CD478, "68 70", "EB B6"),
     # Use the 4:3 reference width for the viewport and the HUD.
-    (0x0C0E57, "DA 35 98 37 5B 00", "DA 35 D0 73 59 00"),
-    (0x07CDD1, "DA 35 98 37 5B 00", "DA 35 D0 73 59 00"),
-    (0x07FE55, "DB 05 98 37 5B 00", "DB 05 D0 73 59 00"),
-    (0x080534, "DB 05 98 37 5B 00", "DB 05 D0 73 59 00"),
+    (0x0C0E57, "DA 35 98 37 5B 00", "DA 35 38 1F 75 00"),
+    (0x07CDD1, "DA 35 98 37 5B 00", "DA 35 38 1F 75 00"),
+    (0x07FE55, "DB 05 98 37 5B 00", "DB 05 38 1F 75 00"),
+    (0x080534, "DB 05 98 37 5B 00", "DB 05 38 1F 75 00"),
     # Texture memory crash fix: skip the probe and report 64 MB.
     (0x0BC0F0, "B8 00 10 00 00 E8 06 D3 09 00 53", "C7 81 A1 02 00 00 00 00 00 04 C3"),
 ]:
@@ -898,7 +899,7 @@ cp spel_patched.dat /path/to/A2Racer4/spel.dat
 objdump -D -Mintel --start-address=0x4c0e50 --stop-address=0x4c0ea0 spel_patched.dat
 ```
 
-Check that the `fidiv` line points to `0x5973d0`, that a `call` sits at `0x4c0e8a`, and that `0x4c0e96` holds `nop`s.
+Check that the `fidiv` line points to `0x751f38`, that a `call` sits at `0x4c0e8a`, and that `0x4c0e96` holds `nop`s.
 
 Check the crash fix as well:
 
@@ -956,6 +957,10 @@ The display's current resolution is not available at 16-bit color. Run the patch
 
 Check the rows for the timer, the world time, the traffic mass, the driving force and the pedals in [All added and changed bytes](#all-added-and-changed-bytes). See [Patch part 9](#patch-part-9-car-physics). A collision can still throw a car, and the Enter reset can drop your car on top of another one.
 
+### The countdown before the race is missing
+
+Check that the instructions at file offsets `0x0C0E57`, `0x07CDD1`, `0x07FE55` and `0x080534` point to `0x00751F38`. See [Patch part 2](#patch-part-2-43-aspect-denominator).
+
 ### Surfaces flicker where they meet
 
 The Z-buffer is still 16 bits. Check that the call at file offset `0x0C0679` goes to `create_zbuffer`. Windows XP and older keep 16 bits on purpose, see [Patch part 8](#patch-part-8-deeper-z-buffer).
@@ -966,7 +971,7 @@ Check that the call at file offset `0x0582AA` goes to `startup`, and that the tw
 
 ### The 3D image is stretched
 
-Check the `fidiv` patch at `0x0C0E57`. It must divide by the 4:3 reference denominator at `0x005973D0`, not by the actual 16:9 width.
+Check the `fidiv` patch at `0x0C0E57`. It must divide by the 4:3 reference denominator at `0x00751F38`, not by the actual 16:9 width.
 
 ### The 3D image is zoomed or cropped
 

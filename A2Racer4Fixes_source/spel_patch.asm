@@ -29,7 +29,7 @@ org 0x575500
 
 %define screen_width  dword [0x5b3798]  ; the current display mode
 %define screen_height dword [0x5b379c]
-%define reference_width dword [0x5973d0] ; 4:3 width for this height
+%define reference_width dword [REFERENCE_WIDTH]
 
 SELECT_FORMAT equ 0x4c2b90
 INIT_MAIN     equ 0x4580e0
@@ -66,6 +66,7 @@ LAST_COUNT   equ 0x751f20               ; double, counter at the last timer upda
 WORLD_TIME   equ 0x751f28               ; double, seconds simulated
 GAS_REST     equ 0x751f30               ; float, what the gas pedal value lost to rounding
 BRAKE_REST   equ 0x751f34               ; float, the same for the brake
+REFERENCE_WIDTH equ 0x751f38            ; 4:3 width for this height
 
 MODE_COUNT    equ 12
 

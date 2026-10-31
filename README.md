@@ -7,7 +7,8 @@ Fixes for the PC version of **A2 Racer 4**:
 - the black edges around objects on current graphics drivers are gone;
 - the game no longer needs its CD in the drive;
 - surfaces no longer flicker where they meet, from Windows Vista on;
-- cars no longer lift their nose, lose their drive or crawl on modern PCs: the car physics no longer depend on the frame rate, or on how long the PC or the game has been running.
+- cars no longer lift their nose, lose their drive or crawl on modern PCs: the car physics no longer depend on the frame rate, or on how long the PC or the game has been running;
+- the 3, 2, 1 before a race is back, after v1.1.0 to v1.4.0 of this patch lost it.
 
 They consist of a patched `spel.dat` executable module that holds these fixes, a small patch to `menu.exe` for the CD check, and an automatic patcher called `A2Racer4Fixes`, for 64-bit and 32-bit Windows and Linux, that applies them to the game folder you choose. You run the patcher once.
 
@@ -49,6 +50,10 @@ On modern PCs cars could pull their nose up, lose their drive or crawl, and traf
 The game runs at up to 120 frames per second, or your display's refresh rate if that is lower. Some other things in the game still count in whole steps per frame and stop working above about 128.
 
 Collisions can still throw a car, as they always could.
+
+## The countdown before a race (v1.4.1)
+
+From v1.1.0 to v1.4.0 the 3, 2, 1 and START before a race were gone. This patch kept a value in a place it took for unused, and the game clears that place when a race loads, so the digits got a size calculated by dividing by zero. The value now sits in memory the game doesn't use.
 
 ## No more flickering (v1.3.0)
 
@@ -174,6 +179,7 @@ To install by hand instead: back up `spel.dat` and `menu.exe`, and follow the st
 - The 32-bit Linux version was tested in earlier releases on a 32-bit Linux 3.18 kernel in QEMU, on emulated processors without SSE2.
 - The v1.2.0 transparency fix was checked in-game by the author on a Radeon 760M under Windows 10. The fix and the CD removal also ran through a race start under Wine with software rendering. Both patchers wrote identical files.
 - The v1.4.0 car physics were checked in-game by the author, and measured under Wine with software rendering, from 15 to about 440 frames per second and with a faked 30-day uptime. The numbers are in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#measurements).
+- The v1.4.1 countdown was checked in-game by the author, and under Wine with software rendering at 4:3 and 16:9.
 - Back up your original files before installing.
 - This project does not include original game assets beyond modified configuration/executable patch files.
 - Testing before v1.1.1 was done on Fedora Linux 44, running the game through Wine using DXVK and DgVoodoo in tandem.
