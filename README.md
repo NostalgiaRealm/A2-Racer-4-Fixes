@@ -3,11 +3,13 @@
 Fixes for the PC version of **A2 Racer 4**:
 
 - the game runs correctly at the resolution you choose, whatever its shape: 16:9, 16:10, 21:9, 32:9, 4:3 or 5:4;
-- the crash at race start on modern graphics cards is gone.
+- the crash at race start on modern graphics cards is gone;
+- the black edges around objects on current graphics drivers are gone;
+- the game no longer needs its CD in the drive.
 
 They consist of three parts:
 
-1. a patched `spel.dat` executable module that makes the 3D game render correctly at your resolution without stretching, and that fixes the crash;
+1. a patched `spel.dat` executable module that makes the 3D game render correctly at your resolution without stretching, and that holds the other game fixes, with a small patch to `menu.exe` for the CD check;
 2. an automatic patcher called `A2Racer4Fixes`, for 64-bit and 32-bit Windows and Linux, that patches `spel.dat` and installs the overlay files in the game folder you choose;
 3. `overlay*.ini` files that the patcher makes from the game's own files, with the HUD moved to the edges of your screen.
 
@@ -22,6 +24,20 @@ Since v1.0.4 the patcher fixes this. The dgVoodoo `VRAM` setting no longer matte
 - Already using an older version? Run the new patcher on your game folder. Your original 4:3 files stay in the `4x3_backup` folder.
 - Game versions 1.00 and 1.01 use an identical `spel.dat`, so both are supported.
 - The technical details are in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#patch-part-4-texture-memory-crash-fix).
+
+## Black edges around objects (v1.2.0)
+
+Some current graphics drivers show black around trees, signs, HUD digits and other objects with transparent parts. It looks the same with bilinear filtering on or off.
+
+The game draws transparent parts with a color key: a single texture color that should be skipped, and in memory that color is black. The patch gives textures a real alpha bit, removes those pixels with the alpha test and turns the color key off.
+
+Textures now use 5 bits for green instead of 6, on every system. The difference is at most very slight extra banding in smooth color gradients.
+
+The details are in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#patch-part-6-transparency-fix).
+
+## No CD needed (v1.2.0)
+
+The game no longer asks for its CD. Install it from the disc once, and after patching you can play with no disc, drive or disc image. The patcher changes `menu.exe` as well as `spel.dat` for this, and keeps the original in the `4x3_backup` folder. The intro video plays from the game folder.
 
 ## Recommended setup
 
@@ -99,6 +115,8 @@ The original game is built around 4:3 display modes. Forcing another shape makes
 2. **3D view:** the vertical view stays as it is at 4:3, and the horizontal view is set to `0.75 x width / height`. Pixels stay square at every shape. A wider screen shows more on the sides, and a narrower one such as 5:4 shows slightly less.
 3. **HUD proportions:** the game squashes its HUD vertically on anything but 4:3. The patch makes it use the 4:3 shape there too, so the HUD keeps its original proportions and its size relative to the height of the screen.
 4. **Texture memory crash fix:** not related to the screen shape, see [Crash fix for modern graphics cards](#crash-fix-for-modern-graphics-cards-v104).
+5. **Transparency fix:** see [Black edges around objects](#black-edges-around-objects-v120).
+6. **CD check removal:** see [No CD needed](#no-cd-needed-v120).
 
 ## What happens to the overlay `.ini` files
 
@@ -127,28 +145,20 @@ Because older versions of this fix tuned the files by hand, the patcher refuses 
 
 1. If you use the "Schaduw" extra car update, install it first.
 
-2. Run the patcher (on Windows, click Yes when it asks for administrator rights), then enter the game folder and your resolution. It writes the patched `spel.dat` and overlay `.ini` files, and moves the originals to the `4x3_backup` folder in the game folder.
+2. Run the patcher (on Windows, click Yes when it asks for administrator rights), then enter the game folder and your resolution. It writes the patched `spel.dat`, `menu.exe` and overlay `.ini` files, and moves the originals to the `4x3_backup` folder in the game folder.
 
 3. Start the racing part of the game normally.
 
 To install by hand instead: back up `spel.dat` and the overlay `.ini` files, patch `spel.dat` with the steps in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#manual-patching-on-windows), and copy the files from `A2Racer4_DashboardFix.zip` into the game folder.
 
-## Playing from a disc image
-
-A2 Racer 4 expects its CD in the drive while you play. If you still have the disc but would rather not keep it in the drive, you can make an image (`.iso`) of your own disc and mount that instead. This patch does not change the game's disc check; it only means the disc is a virtual drive rather than a physical one.
-
-- **Windows 8 or newer:** right-click your `.iso` file and choose **Mount**. Windows adds it as a drive letter, and the game sees it as the CD. Older Windows needs a virtual drive tool.
-- **Lutris / Wine:** mount the `.iso` on your system first. If Wine does not show it as a drive on its own, open `winecfg` → **Drives**, add the mount point, and set its type to **CD-ROM**. All of this project's Wine testing was done this way, with drive `E:` pointing at the mounted image.
-
-Making the image requires the original disc. Tools such as ImgBurn (Windows) or `dd` / Brasero (Linux) can read a disc to an `.iso`.
-
 ## Notes
 
 - The 3D view and HUD layout are calculated from the game's own code. Since v1.1.0 they no longer use hand-tuned values.
 - v1.1.0 was checked in-game by the author. The files it writes were compared under Wine at shapes from 5:4 to 32:9.
-- The 32-bit Windows version is a small C program since v1.1.0, tested under Wine in Windows 98, XP, 7 and 10 mode. It hasn't been run on any real Windows yet. Earlier versions of the same code ran on Windows 98 SE in a VM.
+- The 32-bit Windows version is a small C program since v1.1.0, tested under Wine in Windows 98, XP, 7 and 10 mode. v1.1.1 ran fine on real Windows 7 32-bit with a Mobility Radeon HD 5750. Earlier versions of the same code ran on Windows 98 SE in a VM.
 - The 32-bit Linux version was tested in earlier releases on a 32-bit Linux 3.18 kernel in QEMU, on emulated processors without SSE2.
+- The v1.2.0 transparency fix was checked in-game by the author on a Radeon 760M under Windows 10. The fix and the CD removal also ran through a race start under Wine with software rendering. Both patchers wrote identical files.
 - Back up your original files before installing.
 - This project does not include original game assets beyond modified configuration/executable patch files.
-- All testing was done on Fedora Linux 44 running the game through Wine using DXVK and DgVoodoo in tandem.
-- The v1.0.4 crash fix was tested on Fedora Linux 44 with plain Wine 11.19, D7VK v2.4, and dgVoodoo 2.80 with `VRAM = 256` (which crashes without the fix). It hasn't been tested on Windows yet.
+- Testing before v1.1.1 was done on Fedora Linux 44, running the game through Wine using DXVK and DgVoodoo in tandem.
+- The v1.0.4 crash fix was tested on Fedora Linux 44 with plain Wine 11.19, D7VK v2.4, and dgVoodoo 2.80 with `VRAM = 256` (which crashes without the fix). v1.1.1 also ran fine on real Windows 10 64-bit with a Radeon 760M.

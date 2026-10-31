@@ -3,6 +3,7 @@
 This folder contains the source code for the patcher, `A2Racer4Fixes`. The 64-bit Windows and both Linux versions are written in Go. Build the whole folder (`.`), not a single `.go` file:
 - `admin_windows.go` and `admin_other.go` hold the platform-specific parts;
 - `rsrc_windows_amd64.syso` adds the Windows manifest that asks for administrator rights;
+- `alpha_key_patch.asm` is the source of the transparency fix code, whose bytes are in both patchers. Rebuild it with `nasm -f bin -o alpha_key_patch.bin alpha_key_patch.asm`;
 - `win32/` holds the separate C version for 32-bit Windows, which covers the systems current Go cannot target.
 
 ## Build on Windows
@@ -76,7 +77,7 @@ The patcher creates a `4x3_backup` folder in the game folder, moves the original
 
 File names are matched case-insensitively, and quoted, escaped and `~` paths are accepted. The 32-bit Windows version uses the non-Unicode file functions, so a game folder with characters outside the system's code page gives an error there.
 
-The patched file also contains the texture memory crash fix for modern graphics cards. Every code change is checked against the expected original bytes first, so an unknown `spel.dat` version is left untouched. Running the patcher on an already patched `spel.dat` updates it to the current patch.
+The patched file also contains the texture memory crash fix for modern graphics cards, the transparency fix and the CD check removal. The patcher also moves `menu.exe` to `4x3_backup` and writes a copy without the CD check; a file that already has the change is left alone. Every code change is checked against the expected original bytes first, so an unknown `spel.dat` version is left untouched. Running the patcher on an already patched `spel.dat` updates it to the current patch.
 
 On Windows the patcher only runs with administrator rights; without them it stops before changing anything. Windows 95, 98 and Me have no such rights. The Linux version needs no root rights, because the game lives in your own Wine prefix.
 

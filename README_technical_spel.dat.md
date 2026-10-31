@@ -49,6 +49,8 @@ file offset 0x1973D0 -> VA 0x005973D0
 | 3 | Horizontal clip range becomes `±0.75 × W / H` |
 | 4 | Texture memory crash fix, not related to the screen shape |
 | 5 | HUD code uses the 4:3 reference width instead of `W`, in three places |
+| 6 | Transparency fix: alpha test instead of relying on the color key, not related to the screen shape |
+| 7 | CD check removal, in `spel.dat` and `menu.exe` |
 
 ## Patch part 1: display-mode table
 
@@ -295,6 +297,100 @@ On anything but 4:3 this squashes the HUD vertically. Using the 4:3 reference wi
 
 Horizontally, HUD `x` reaches the screen edges where `0.99 / 320 × x - 1 = ±0.75 × W / H`. Compared with 4:3 the edges move by `(0.75 × W / H - 1) × 320 / 0.99`, which is the shift the patcher applies to elements attached to an edge. See [Overlay files](#overlay-files).
 
+## Patch part 6: transparency fix
+
+### The problem
+
+Textures are 24-bit TGA files that mark transparent pixels with `(255, 0, 127)`. While loading, the game turns that color into its key, `DAT_00740D24/28/2C`, which nothing ever writes and so stays 0. Any other color that would become 0 is moved to red 1 (`FUN_004C7EE0`, `FUN_004C81B0`). So in a 16-bit texture, transparent means exactly `0x0000`, black.
+
+The game then calls `SetColorKey` with key 0 and enables `D3DRENDERSTATE_COLORKEYENABLE` once at device creation. On a Radeon 760M under Windows 10 this shows black around objects and HUD elements, while a Mobility Radeon HD 5750 under Windows 7 does not. `FILTER=0` makes no difference, so it is not a filtering fringe. Under Wine, forcing `COLORKEYENABLE` to 0 gives the same kind of black.
+
+### The fix
+
+The code is in [`A2Racer4Fixes_source/alpha_key_patch.asm`](A2Racer4Fixes_source/alpha_key_patch.asm), in unused space at the end of `.text` (file offset `0x175500`, VA `0x00575500`). The section's virtual size is raised so that space is certainly mapped.
+
+1. **Format:** the game selects the alpha format with the most alpha bits, which it never uses. The selection now prefers the fewest, normally A1R5G5B5. At init the game asks for `16BPP_RGB`; if a 16-bit alpha format exists, the patch asks for `16BPP_ALPHA` instead, sets `ALPHATESTENABLE = 1`, `ALPHAFUNC = GREATER`, `ALPHAREF = 0` and turns `COLORKEYENABLE` off. Without such a format everything behaves as before.
+2. **Texels:** both color converters end by setting the alpha mask on any result other than 0. Other surfaces have an alpha mask of 0, so they are unaffected.
+3. **Vertex alpha:** `D3DTBLEND_MODULATE` takes alpha from a texture that has it and ignores vertex alpha, which would make shadows and clouds opaque. All 18 `ALPHABLENDENABLE` call sites go through a helper that also selects `D3DTBLEND_MODULATEALPHA` while blending is on and `D3DTBLEND_MODULATE` when it is off.
+4. **Alpha 0 that must stay visible:** skidmarks and the radar use the inverted `INVSRCALPHA / SRCALPHA` blend, where fresh marks have alpha 0, and objects have blend modes such as `ONE / INVSRCCOLOR`. At those three "on" sites (`0x044523C`, `0x044275E`, `0x0B5E50`) the helper turns the alpha test off until blending is switched again.
+5. **Viewport clear:** the alpha test is off during `IDirect3DViewport2::Clear`.
+
+### Why the color key has to be off
+
+Three test builds were run on the Radeon 760M, all with the format, texel and vertex alpha changes:
+
+| Build | Alpha test | Color key | Clear guard | Result |
+|---|---|---|---|---|
+| A | on | on | yes | HUD clean, 3D broken: frozen frame with blocks of stale pixels and a solid black car body |
+| B | on | off | yes | Correct: solid 3D, no black edges in 3D or the HUD |
+| C | off | on | yes | Screen full of rapidly moving colored blocks |
+
+Why this driver behaves this way is unknown. The Clear guard made no visible difference by itself in build A. It stays because no build without it has been tried on this GPU.
+
+Patched bytes outside the new code:
+
+| File offset | Original | Patched | What |
+|---|---|---|---|
+| `0x0C287D` | `8E` | `8D` | alpha format choice |
+| `0x0C058A` | `E8 01 26 00 00` | `E8 71 4F 0B 00` | texture format choice |
+| `0x0C7FF9` | `03 C6 5E 5B C3` | `E9 70 D5 0A 00` | 24-bit color conversion |
+| `0x0C82C9` | `5B 03 C6 5E C3` | `E9 A6 D2 0A 00` | palette color conversion |
+| `0x03DEF9` | `8B 08 FF 51 5C` | `E8 85 76 13 00` | alpha blend switch |
+| `0x03E04A` | `8B 08 FF 51 5C` | `E8 34 75 13 00` | alpha blend switch |
+| `0x040224` | `8B 08 FF 51 5C` | `E8 5A 53 13 00` | alpha blend switch |
+| `0x04031A` | `8B 10 FF 52 5C` | `E8 64 52 13 00` | alpha blend switch |
+| `0x04275C` | `8B 08 FF 51 5C` | `E8 29 2E 13 00` | alpha blend switch |
+| `0x042B4E` | `8B 08 FF 51 5C` | `E8 30 2A 13 00` | alpha blend switch |
+| `0x043D8E` | `8B 10 FF 52 5C` | `E8 F0 17 13 00` | alpha blend switch |
+| `0x043E9C` | `8B 10 FF 52 5C` | `E8 E2 16 13 00` | alpha blend switch |
+| `0x04523A` | `8B 08 FF 51 5C` | `E8 4B 03 13 00` | alpha blend switch |
+| `0x0453F9` | `8B 10 FF 52 5C` | `E8 85 01 13 00` | alpha blend switch |
+| `0x0470C3` | `8B 08 FF 51 5C` | `E8 BB E4 12 00` | alpha blend switch |
+| `0x047276` | `8B 10 FF 52 5C` | `E8 08 E3 12 00` | alpha blend switch |
+| `0x05DD24` | `8B 08 FF 51 5C` | `E8 5A 78 11 00` | alpha blend switch |
+| `0x05DD98` | `8B 10 FF 52 5C` | `E8 E6 77 11 00` | alpha blend switch |
+| `0x085F29` | `8B 08 FF 51 5C` | `E8 55 F6 0E 00` | alpha blend switch |
+| `0x08614A` | `8B 08 FF 51 5C` | `E8 34 F4 0E 00` | alpha blend switch |
+| `0x0B5E4D` | `8B 08 50 FF 51 5C` | `50 E8 37 F7 0B 00` | alpha blend switch |
+| `0x0B5E6C` | `8B 10 50 FF 52 5C` | `50 E8 11 F7 0B 00` | alpha blend switch |
+| `0x0C0F80` | `8B 11 50 6A 01 51 FF 52 30` | `50 6A 01 51 E8 68 46 0B 00` | viewport clear |
+| `0x0001F8` | `4A 44 17 00` | `00 50 17 00` | code section size |
+
+New code at `0x175500`, which must be all zero before patching:
+
+```text
+83 7C 24 04 03 75 60 A1 26 B8 73 00 83 F8 FF 74 56 69 C0 B0 00 00 00 03
+05 D8 B7 73 00 83 78 54 10 75 44 C7 44 24 04 04 00 00 00 6A 00 6A 18 A1
+B4 B4 73 00 50 8B 08 FF 51 5C 6A 05 6A 19 A1 B4 B4 73 00 50 8B 08 FF 51
+5C 6A 01 6A 0F A1 B4 B4 73 00 50 8B 08 FF 51 5C 6A 00 6A 29 A1 B4 B4 73
+00 50 8B 08 FF 51 5C B8 90 2B 4C 00 FF E0 01 F0 5E 5B EB 04 5B 01 F0 5E
+85 C0 74 06 0B 05 A8 09 74 00 C3 BA 01 00 00 00 EB 0C 8B 54 24 0C 85 D2
+0F 94 C2 0F B6 D2 52 FF 74 24 10 6A 1B FF 74 24 10 8B 04 24 8B 08 FF 51
+5C 5A 50 A1 2E B8 73 00 3B 05 26 B8 73 00 75 35 52 6A 0F FF 74 24 10 8B
+04 24 8B 08 FF 51 5C 83 3D 05 B5 73 00 02 75 1D 8B 44 24 10 F7 D8 19 C0
+83 E0 02 83 C0 02 50 6A 15 FF 74 24 10 8B 04 24 8B 08 FF 51 5C 58 C2 0C
+00 A1 2E B8 73 00 3B 05 26 B8 73 00 75 4A 50 54 6A 0F A1 B4 B4 73 00 50
+8B 08 FF 51 58 6A 00 6A 0F A1 B4 B4 73 00 50 8B 08 FF 51 5C FF 74 24 14
+FF 74 24 14 FF 74 24 14 FF 74 24 14 8B 04 24 8B 08 FF 51 30 5A 50 52 6A
+0F A1 B4 B4 73 00 50 8B 08 FF 51 5C 58 C2 10 00 8B 44 24 04 8B 08 FF 61
+30
+```
+
+Known limit: with the color key off, the few texels with the key inside the part of `S_SFX` used for skidmarks are drawn dark, because the alpha test is off for skidmarks.
+
+## Patch part 7: CD check removal
+
+`spel.dat`: `FUN_004CD3B0` looks for the disc on all CD-ROM drives and stops with "A2 Racer CD-ROM niet gevonden" when it finds none. The stop now returns instead. Files are looked up in the game folder first (`FUN_004CD4A0`), so the disc is only used for a file missing from the folder, and a disc that is present still works.
+
+| File | File offset | VA | Original | Patched |
+|---|---|---|---|---|
+| `spel.dat` | `0x0CD478` | `0x004CD478` | `68 70` | `EB B6` |
+| `menu.exe` | `0x0A5154` | `0x004A5D54` | `E8 7F FE FF FF 84 C0 74 08` | `90 90 90 90 90 90 90 90 90` |
+
+`menu.exe`: `FUN_004A5D4C` searches drives C to Z for `DATA\INTRO1.MPG` and shows its "CD not found" dialog when that fails. The patch skips the search and takes the "found" result. The intro itself plays from the game folder first (`FUN_004A50D0`).
+
+The optional `[CDCHECK]` section the game can read from `game.ini` is not in the shipped file and is left alone. Without it the game does not check.
+
 ## Manual patching on Windows
 
 ### Recommended tools
@@ -376,7 +472,15 @@ C7 81 A1 02 00 00 00 00 00 04 C3
 
 This step also works on its own, for example on an original 4:3 `spel.dat`.
 
-### Step 8: save as `spel.dat`
+### Step 8: apply the transparency fix
+
+Write the new code and the patched bytes from [Patch part 6](#patch-part-6-transparency-fix).
+
+### Step 9: remove the CD check
+
+Apply both changes from [Patch part 7](#patch-part-7-cd-check-removal). The second one is in `menu.exe`, so back that file up first.
+
+### Step 10: save as `spel.dat`
 
 Save the patched file and rename it to:
 
@@ -386,7 +490,7 @@ spel.dat
 
 Then place it in the game directory.
 
-### Step 9: install the overlay `.ini` files
+### Step 11: install the overlay `.ini` files
 
 See [Overlay files](#overlay-files), or use `A2Racer4_DashboardFix.zip` on a 16:9 screen.
 
@@ -554,6 +658,60 @@ if data[offset:offset + len(old)] != old and data[offset:offset + len(new)] != n
 
 data[offset:offset + len(new)] = new
 
+# Transparency fix and spel.dat CD check, see parts 6 and 7.
+ALPHA_KEY_CODE = bytes.fromhex("""
+83 7C 24 04 03 75 60 A1 26 B8 73 00 83 F8 FF 74 56 69 C0 B0 00 00 00 03
+05 D8 B7 73 00 83 78 54 10 75 44 C7 44 24 04 04 00 00 00 6A 00 6A 18 A1
+B4 B4 73 00 50 8B 08 FF 51 5C 6A 05 6A 19 A1 B4 B4 73 00 50 8B 08 FF 51
+5C 6A 01 6A 0F A1 B4 B4 73 00 50 8B 08 FF 51 5C 6A 00 6A 29 A1 B4 B4 73
+00 50 8B 08 FF 51 5C B8 90 2B 4C 00 FF E0 01 F0 5E 5B EB 04 5B 01 F0 5E
+85 C0 74 06 0B 05 A8 09 74 00 C3 BA 01 00 00 00 EB 0C 8B 54 24 0C 85 D2
+0F 94 C2 0F B6 D2 52 FF 74 24 10 6A 1B FF 74 24 10 8B 04 24 8B 08 FF 51
+5C 5A 50 A1 2E B8 73 00 3B 05 26 B8 73 00 75 35 52 6A 0F FF 74 24 10 8B
+04 24 8B 08 FF 51 5C 83 3D 05 B5 73 00 02 75 1D 8B 44 24 10 F7 D8 19 C0
+83 E0 02 83 C0 02 50 6A 15 FF 74 24 10 8B 04 24 8B 08 FF 51 5C 58 C2 0C
+00 A1 2E B8 73 00 3B 05 26 B8 73 00 75 4A 50 54 6A 0F A1 B4 B4 73 00 50
+8B 08 FF 51 58 6A 00 6A 0F A1 B4 B4 73 00 50 8B 08 FF 51 5C FF 74 24 14
+FF 74 24 14 FF 74 24 14 FF 74 24 14 8B 04 24 8B 08 FF 51 30 5A 50 52 6A
+0F A1 B4 B4 73 00 50 8B 08 FF 51 5C 58 C2 10 00 8B 44 24 04 8B 08 FF 61
+30
+""")
+if data[0x175500:0x175500 + len(ALPHA_KEY_CODE)] not in (bytes(len(ALPHA_KEY_CODE)), ALPHA_KEY_CODE):
+    raise RuntimeError("Unexpected bytes at the transparency code. Wrong executable version?")
+data[0x175500:0x175500 + len(ALPHA_KEY_CODE)] = ALPHA_KEY_CODE
+
+for offset, old, new in [
+    (0x0C287D, "8E", "8D"),
+    (0x0C058A, "E8 01 26 00 00", "E8 71 4F 0B 00"),
+    (0x0C7FF9, "03 C6 5E 5B C3", "E9 70 D5 0A 00"),
+    (0x0C82C9, "5B 03 C6 5E C3", "E9 A6 D2 0A 00"),
+    (0x03DEF9, "8B 08 FF 51 5C", "E8 85 76 13 00"),
+    (0x03E04A, "8B 08 FF 51 5C", "E8 34 75 13 00"),
+    (0x040224, "8B 08 FF 51 5C", "E8 5A 53 13 00"),
+    (0x04031A, "8B 10 FF 52 5C", "E8 64 52 13 00"),
+    (0x04275C, "8B 08 FF 51 5C", "E8 29 2E 13 00"),
+    (0x042B4E, "8B 08 FF 51 5C", "E8 30 2A 13 00"),
+    (0x043D8E, "8B 10 FF 52 5C", "E8 F0 17 13 00"),
+    (0x043E9C, "8B 10 FF 52 5C", "E8 E2 16 13 00"),
+    (0x04523A, "8B 08 FF 51 5C", "E8 4B 03 13 00"),
+    (0x0453F9, "8B 10 FF 52 5C", "E8 85 01 13 00"),
+    (0x0470C3, "8B 08 FF 51 5C", "E8 BB E4 12 00"),
+    (0x047276, "8B 10 FF 52 5C", "E8 08 E3 12 00"),
+    (0x05DD24, "8B 08 FF 51 5C", "E8 5A 78 11 00"),
+    (0x05DD98, "8B 10 FF 52 5C", "E8 E6 77 11 00"),
+    (0x085F29, "8B 08 FF 51 5C", "E8 55 F6 0E 00"),
+    (0x08614A, "8B 08 FF 51 5C", "E8 34 F4 0E 00"),
+    (0x0B5E4D, "8B 08 50 FF 51 5C", "50 E8 37 F7 0B 00"),
+    (0x0B5E6C, "8B 10 50 FF 52 5C", "50 E8 11 F7 0B 00"),
+    (0x0C0F80, "8B 11 50 6A 01 51 FF 52 30", "50 6A 01 51 E8 68 46 0B 00"),
+    (0x0001F8, "4A 44 17 00", "00 50 17 00"),
+    (0x0CD478, "68 70", "EB B6"),
+]:
+    old, new = bytes.fromhex(old), bytes.fromhex(new)
+    if data[offset:offset + len(old)] != old and data[offset:offset + len(new)] != new:
+        raise RuntimeError(f"Unexpected bytes at 0x{offset:X}. Wrong executable version?")
+    data[offset:offset + len(new)] = new
+
 output_path.write_bytes(data)
 
 print(f"Patched {input_path} -> {output_path}")
@@ -661,6 +819,14 @@ shift = (0.75 × W / H - 1) × 320 / 0.99, rounded
 ### The screen goes black and the game crashes when a race starts
 
 That is the texture memory probe overflowing on a modern graphics card (more than ~128 MB of VRAM). Check that the bytes at `0x0BC0F0` are `C7 81 A1 02 00 00 00 00 00 04 C3`; see [Patch part 4](#patch-part-4-texture-memory-crash-fix).
+
+### Objects have black edges or black boxes around them
+
+That is the game's color key on a current driver. Check the changes in [Patch part 6](#patch-part-6-transparency-fix).
+
+### The game asks for the CD
+
+Check both changes in [Patch part 7](#patch-part-7-cd-check-removal). The menu and the race each have their own check.
 
 ### The game still opens in the old resolution
 
