@@ -6,7 +6,8 @@ Fixes for the PC version of **A2 Racer 4**:
 - the crash at race start on modern graphics cards is gone;
 - the black edges around objects on current graphics drivers are gone;
 - the game no longer needs its CD in the drive;
-- surfaces no longer flicker where they meet, from Windows Vista on.
+- surfaces no longer flicker where they meet, from Windows Vista on;
+- cars no longer lift their nose, lose their drive or crawl on modern PCs: the car physics no longer depend on the frame rate, or on how long the PC or the game has been running.
 
 They consist of a patched `spel.dat` executable module that holds these fixes, a small patch to `menu.exe` for the CD check, and an automatic patcher called `A2Racer4Fixes`, for 64-bit and 32-bit Windows and Linux, that applies them to the game folder you choose. You run the patcher once.
 
@@ -35,6 +36,19 @@ The details are in [`README_technical_spel.dat.md`](README_technical_spel.dat.md
 ## No CD needed (v1.2.0)
 
 The game no longer asks for its CD. Install it from the disc once, and after patching you can play with no disc, drive or disc image. The patcher changes `menu.exe` as well as `spel.dat` for this, and keeps the original in the `4x3_backup` folder. The intro video plays from the game folder.
+
+## Car physics (v1.4.0)
+
+On modern PCs cars could pull their nose up, lose their drive or crawl, and traffic did this most of all. Four bugs in the game caused it, and they are all fixed:
+
+- **Traffic lifted its nose.** The game gives traffic one push per frame, with an amount that suits about 25 frames per second. At 60 frames per second that is more than double, and because the force sits low on the vehicle, the nose comes up, by up to 45 degrees. A vehicle like that is also a ramp for every car around it. Each frame now gets its share of the push.
+- **The clock.** The game kept its time in a number format that loses precision the longer the clock runs. After weeks of uptime the time between frames is often negative: the whole world runs in slow motion, or stands still at high frame rates, so nothing can drive. Windows 8 and newer keep counting through a normal shutdown when Fast Startup is on, so long uptimes are common. The time between frames now comes straight from the counter.
+- **The turbo.** Between two physics steps only the force of the last frame counted, so the turbo of the player and the racers lost strength above 66 frames per second. Forces now add up until the next physics step, and are applied once.
+- **Gas and brake.** Above 300 frames per second the steps of your pedals got rounded away, and the car stayed where it was with your foot down. The rounded part is now kept.
+
+The game runs at up to 120 frames per second, or your display's refresh rate if that is lower. Some other things in the game still count in whole steps per frame and stop working above about 128.
+
+Collisions can still throw a car, as they always could.
 
 ## No more flickering (v1.3.0)
 
@@ -118,6 +132,7 @@ The original game is built around 4:3 display modes. Forcing another shape makes
 5. **Transparency fix:** see [Black edges around objects](#black-edges-around-objects-v120).
 6. **CD check removal:** see [No CD needed](#no-cd-needed-v120).
 7. **Deeper Z-buffer:** see [No more flickering](#no-more-flickering-v130).
+8. **Car physics:** see [Car physics](#car-physics-v140).
 
 ## How the HUD moves
 
@@ -158,6 +173,7 @@ To install by hand instead: back up `spel.dat` and `menu.exe`, and follow the st
 - The 32-bit Windows version is a small C program since v1.1.0, tested under Wine in Windows 98, XP, 7 and 10 mode. v1.1.1 ran fine on real Windows 7 32-bit with a Mobility Radeon HD 5750. Earlier versions of the same code ran on Windows 98 SE in a VM.
 - The 32-bit Linux version was tested in earlier releases on a 32-bit Linux 3.18 kernel in QEMU, on emulated processors without SSE2.
 - The v1.2.0 transparency fix was checked in-game by the author on a Radeon 760M under Windows 10. The fix and the CD removal also ran through a race start under Wine with software rendering. Both patchers wrote identical files.
+- The v1.4.0 car physics were checked in-game by the author, and measured under Wine with software rendering, from 15 to about 440 frames per second and with a faked 30-day uptime. The numbers are in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#measurements).
 - Back up your original files before installing.
 - This project does not include original game assets beyond modified configuration/executable patch files.
 - Testing before v1.1.1 was done on Fedora Linux 44, running the game through Wine using DXVK and DgVoodoo in tandem.

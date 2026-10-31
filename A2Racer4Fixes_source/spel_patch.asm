@@ -12,6 +12,10 @@
 ; a 16-bit format with alpha, clears alpha only on transparent texels, discards
 ; them with the alpha test and turns the color key off. Key and alpha test together
 ; broke all 3D on a Radeon 760M.
+;
+; Car physics:
+; The physics world steps at a fixed 66 Hz, but the game sets forces once per frame,
+; and it kept its time in a float. See the code at the end for what that broke.
 
 bits 32
 org 0x575500
@@ -37,6 +41,31 @@ GetModuleHandleA equ 0x5760a0           ; import table slots
 GetProcAddress   equ 0x5760fc
 GetSystemMetrics equ 0x5761f4
 GetVersion       equ 0x5760ac
+QueryPerformanceCounter equ 0x576058
+timeGetTime      equ 0x576250
+
+GAME_TIMER_UPDATE equ 0x4a6700
+GAME_TIMER_OBJECT equ 0x7128b0
+GAME_TIME_STEP    equ 0x4a6800          ; returns the time step in st0
+TIMER_FREQUENCY   equ 4                 ; float, in the timer object
+TIMER_SECONDS     equ 8                 ; float
+TIMER_STEP        equ 12                ; float
+
+FLOAT_TO_INTEGER  equ 0x558524          ; takes st0, rounds toward zero, returns eax
+STEP_WORLD_UNTIL  equ 0x4f8380          ; ecx = world, double on the stack
+NORMALIZE_VECTOR  equ 0x4f9680          ; ecx = vector, returns its old length in st0
+FLOAT_ONE         equ 0x576318
+FORCE_SET_CONTINUE equ 0x4a5cbe
+TRAILER_PUSH_CONTINUE equ 0x4a97f6
+
+; Free memory after the game's data, in the last page of its data section.
+LAST_FRAME   equ 0x751f00               ; counter at the start of the last frame
+QPC_START    equ 0x751f10               ; counter when the game started
+TICKS_START  equ 0x751f18               ; the same for timeGetTime
+LAST_COUNT   equ 0x751f20               ; double, counter at the last timer update
+WORLD_TIME   equ 0x751f28               ; double, seconds simulated
+GAS_REST     equ 0x751f30               ; float, what the gas pedal value lost to rounding
+BRAKE_REST   equ 0x751f34               ; float, the same for the brake
 
 MODE_COUNT    equ 12
 
@@ -461,6 +490,214 @@ create_zbuffer:
     call [ecx+0x18]
     ret
 
+; Replaces both QueryPerformanceCounter calls of the game timer. That counter runs
+; from when Windows started, which only adds a large number that means nothing here.
+timer_counter:
+    push dword [esp+4]
+    call [QueryPerformanceCounter]
+    test eax, eax
+    jz .out
+    mov ecx, [esp+4]
+    mov eax, [QPC_START]
+    or eax, [QPC_START+4]
+    jnz .have_start
+    mov eax, [ecx]
+    mov [QPC_START], eax
+    mov eax, [ecx+4]
+    mov [QPC_START+4], eax
+.have_start:
+    mov eax, [ecx]
+    mov edx, [ecx+4]
+    sub eax, [QPC_START]
+    sbb edx, [QPC_START+4]
+    mov [ecx], eax
+    mov [ecx+4], edx
+    mov eax, 1
+.out:
+    ret 4
+
+; The same for the timeGetTime calls, for the rare system without that counter.
+timer_ticks:
+    call [timeGetTime]
+    cmp dword [TICKS_START+4], 0
+    jne .have_start
+    mov [TICKS_START], eax
+    mov dword [TICKS_START+4], 1
+.have_start:
+    sub eax, [TICKS_START]
+    ret
+
+; Replaces how both timer functions turn the counter in st0 into time, with the timer
+; object in esi. The game kept seconds in a 32-bit float and took the time step from
+; that, so the step got noisy the longer the clock had run, and after weeks it was
+; negative half of the time, which slows the whole world down and at high frame rates
+; stops it. Take the step from the counter itself, so it is always exact.
+timer_step:
+    fld st0
+    fsub qword [LAST_COUNT]
+    fdiv dword [esi+TIMER_FREQUENCY]
+    fstp dword [esi+TIMER_STEP]
+    fst qword [LAST_COUNT]
+    fdiv dword [esi+TIMER_FREQUENCY]
+    fstp dword [esi+TIMER_SECONDS]
+    ret
+
+; Replaces the world step, with the world in ecx and the time step on the stack. It
+; added up world time in a float as well, which loses precision over a long session.
+world_step:
+    fld dword [esp+4]
+    mov eax, [esp+4]
+    mov [ecx+0x78], eax
+    fadd qword [WORLD_TIME]
+    fst qword [WORLD_TIME]
+    fst dword [ecx+0x74]
+    sub esp, 8
+    fstp qword [esp]
+    mov ecx, [ecx+0x14]
+    mov eax, STEP_WORLD_UNTIL
+    call eax
+    ret 4
+
+; Returns in st0 the share of a whole push that this frame stands for. The game pushes
+; traffic and trailers once per frame, with amounts that suit AI_FRAME_RATE frames per
+; second: 25, the rate its turbo formula is written for. At a higher frame rate each
+; frame gets its share. Below that rate a frame gets one whole push, as it always did.
+; Without this traffic drives twice as hard at 50 frames per second, its force sits
+; below the centre of mass, and from about 45 frames per second that lifts its nose.
+frame_share:
+    push eax
+    push ecx
+    mov ecx, GAME_TIMER_OBJECT
+    mov eax, GAME_TIME_STEP
+    call eax
+    fmul dword [ai_frame_rate]
+    fld1
+    fcom st1
+    fnstsw ax
+    sahf
+    jae .use_share
+    fxch st1
+.use_share:
+    fstp st0
+    pop ecx
+    pop eax
+    ret
+
+; Replaces the division that gives the mass, in both functions that drive traffic. They
+; use it for every force and push they apply, so this scales all of them.
+traffic_mass:
+    fdivr dword [FLOAT_ONE]
+    call frame_share
+    fmulp st1, st0
+    ret
+
+; Jumps here from the start of the push that trailers use, which has the push on the
+; stack, for the same reason.
+trailer_push:
+    call frame_share
+    fld st0
+    fmul dword [esp+4]
+    fstp dword [esp+4]
+    fld st0
+    fmul dword [esp+8]
+    fstp dword [esp+8]
+    fmul dword [esp+12]
+    fstp dword [esp+12]
+    push esi
+    mov esi, ecx
+    mov eax, [esi+0x10]
+    push TRAILER_PUSH_CONTINUE
+    ret
+
+; Jumps here from where the game stores the force for the driving controller of a car,
+; in ecx. Add it to what is waiting instead of replacing that, so nothing gets lost
+; when several frames pass between two physics steps. The x and y are on the stack.
+force_add:
+    mov [esp+16], eax
+    fld dword [esp+12]
+    fchs
+    fadd dword [ecx+0x84]
+    fstp dword [ecx+0x84]
+    fld dword [esp+8]
+    fadd dword [ecx+0x80]
+    fstp dword [ecx+0x80]
+    fld dword [esp+16]
+    fadd dword [ecx+0x88]
+    fstp dword [ecx+0x88]
+    push FORCE_SET_CONTINUE
+    ret
+
+; Replaces the call in the driving controller that checks the length of the force, with
+; the force in ecx. That function also normalizes the force, so a force applied at full
+; strength once, on the first physics step after each frame, and then as a vector of
+; length 1. That is what ties the thrust of traffic, and the turbo of the player and
+; the racers, to the frame rate. Apply it once and clear it, at any frame rate.
+force_take:
+    push ecx
+    mov eax, NORMALIZE_VECTOR
+    call eax
+    pop ecx
+    xor eax, eax
+    mov [ecx], eax
+    mov [ecx+4], eax
+    mov [ecx+8], eax
+    ret
+
+; Replace the conversion to a whole number in the player's gas and brake pedals, with
+; the old value plus this frame's step in st0. Above 300 frames per second that step
+; is below 1 and got rounded away, so the pedal did nothing. Keep what is rounded off.
+pedal_gas:
+    mov ecx, GAS_REST
+    jmp short pedal_value
+pedal_brake:
+    mov ecx, BRAKE_REST
+pedal_value:
+    fadd dword [ecx]
+    fld st0
+    mov eax, FLOAT_TO_INTEGER
+    call eax
+    push eax
+    fisub dword [esp]
+    pop eax
+    fstp dword [ecx]
+    ret
+
+; Replaces the call to the game timer at the start of every frame, which has the timer
+; object in ecx. Forces no longer depend on the frame rate, but some whole number
+; counters still do: the fade of a trailer stops moving above 128 frames per second.
+frame_limit:
+    cmp dword [ecx], 0
+    je .go                              ; no high resolution counter to wait with
+    push ecx
+    sub esp, 8
+.again:
+    push esp
+    call [QueryPerformanceCounter]
+    mov ecx, [esp+8]
+    fild qword [esp]
+    fild qword [LAST_FRAME]
+    fsubp st1, st0
+    fdiv dword [ecx+TIMER_FREQUENCY]
+    fcomp dword [frame_time]
+    fnstsw ax
+    sahf
+    jae .done
+    mov eax, [LAST_FRAME]
+    or eax, [LAST_FRAME+4]
+    jz .done
+    pause
+    jmp short .again
+.done:
+    pop eax
+    mov [LAST_FRAME], eax
+    pop eax
+    mov [LAST_FRAME+4], eax
+    pop ecx
+.go:
+    jmp GAME_TIMER_UPDATE
+
+ai_frame_rate:      dd __float32__(25.0)
+frame_time:         dd __float32__(0.0083333333)
 user32_name:        db "USER32.DLL", 0
 enum_settings_name: db "EnumDisplaySettingsA", 0
 dpi_aware_name:     db "SetProcessDPIAware", 0
