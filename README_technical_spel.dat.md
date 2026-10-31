@@ -51,7 +51,9 @@ file offset 0x1B3798 -> VA 0x005B3798
 | 6 | Transparency fix: alpha test instead of relying on the color key, not related to the screen shape |
 | 7 | CD check removal, in `spel.dat` and `menu.exe` |
 | 8 | Deeper Z-buffer against flickering, not related to the screen shape |
-| 9 | Car physics: exact time steps, forces and pushes that follow time instead of frames, working pedals, a 120 FPS limit |
+| 9 | Car physics: exact time steps, forces and pushes that follow time instead of frames, working pedals, a 240 FPS limit |
+| 10 | 32-bit display mode from Windows Vista on, not related to the screen shape |
+| 11 | A car that hangs with an axle in the air, or tipped over, goes back on the road |
 
 ## Patch part 1: display-mode table
 
@@ -388,9 +390,9 @@ Above 300 FPS the step is below 1 and rounds away. The car then stays where it i
 
 ### The frame limit
 
-`frame_limit` replaces the timer call at the start of every frame (`0x0044CB9E`) and waits until 1/120 of a second has passed. The game doesn't import `Sleep`, so it waits actively, as the unlimited game did anyway. A display at a lower refresh rate keeps the frame rate lower through vertical sync.
+`frame_limit` replaces the timer call at the start of every frame (`0x0044CB9E`) and waits until 1/240 of a second has passed. The game doesn't import `Sleep`, so it waits actively, as the unlimited game did anyway. A display at a lower refresh rate keeps the frame rate lower through vertical sync.
 
-The physics no longer need this. A sweep of the code for time steps that go through `__ftol` found other whole number steps, and those do need it: the fade of a trailer in `FUN_00430EA0` is `(int)(alpha + dt × 128)` and stops above 128 FPS. Ipion interpolates positions to the current time, so frames between physics steps do show movement.
+Nothing that was checked needs it any more. A sweep of the code for time steps that go through `__ftol` found one whole number step that breaks in this range: the fade of a trailer in `FUN_00430EA0` is `(int)(alpha + dt × 128)` and stopped above 128 FPS, so `trailer_fade` keeps what is rounded off, like the pedals. The other steps are frame counts of the form `(int)(seconds / dt)`, which are fine at any rate, and whole milliseconds per frame in `FUN_00469C60`, which round to nothing at 1000 FPS. The limit keeps the game far from that, and inside the range the physics were measured in. `FUN_0043C890`, the fuel station camera, writes `(int)(2 / dt)` steps into an array for 100, but nothing calls it. Ipion interpolates positions to the current time, so frames between physics steps do show movement.
 
 ### Measurements
 
@@ -426,16 +428,102 @@ A bot driving the player's car along the path of a racer for 110 seconds, with b
 ### What this doesn't establish
 
 - The numbers are from Wine with software rendering, and a held key or a bot. The author checked the result in-game before the release, without these measurements.
-- What exactly lifted the player's car on a real PC was not reproduced by itself. The player's wheels run inside the physics steps, so they don't depend on the frame rate, and a clean clock showed no lifting by itself at any frame rate. What was seen: the frozen and slowed world at a long uptime, and the 8 stops at high frame rates. Nose-up traffic as a ramp under the player's car is inferred, from what it would take for the wheels to lose the road.
+- What lifted cars after these fixes is in [Patch part 11](#patch-part-11-cars-that-get-hung-up). At the time of this part it had not been reproduced by itself. The player's wheels run inside the physics steps, so they don't depend on the frame rate, and a clean clock showed no lifting by itself at any frame rate. What was seen: the frozen and slowed world at a long uptime, and the 8 stops at high frame rates. Nose-up traffic as a ramp under the player's car is inferred, from what it would take for the wheels to lose the road.
 - The reset can drop a car on top of another car: Enter at the start of a race put the player's car on the roof of a racer, nose up at 0.24 and wheels spinning, where it rode for 35 seconds. That isn't changed, and it looks a lot like a lifted car. `FUN_0040E5A0` puts the car 20 units above a free spot of the road, but not all vehicles count for that check.
 - `FUN_004FC2D0` (the body's counter torque) only runs when braking, so its last value stays until the next brake. It's small: 1600 at full brake, which tilts the car about 1 degree, so it's left as it is.
 - Trailers weren't run. Some objects on the road still throw a car that hits them at speed, like the one near (-15020, 7570), at any frame rate.
+
+## Patch part 10: 32-bit display mode
+
+`FUN_004C55C0` asks for a display mode with the depth at `0x005B37A0`, always 16 for the race. Windows 8 and newer have no real 16-bit modes and emulate them, converting every frame on its way to the screen. On a Radeon 760M under Windows 10 with vsync off, the game held 51/52 FPS at its normal resolution and reached the limit, then 120 FPS, at 640x480, so the cost grows with the resolution. With the 32-bit mode the same laptop runs at 165 FPS at its normal resolution, so the 16-bit mode was that cost. What exactly takes the time inside Windows was not measured. 165 is the refresh rate of its display, even with vsync set to always off in AMD's settings, so here the game's `Flip` with `DDFLIP_WAIT` does hold it to the display.
+
+`display_depth` replaces reading that depth for the call at `0x004C58AB`: from Windows Vista on (`GetVersion` major version 6 or higher) it asks for 32 bits. The value at `0x005B37A0` stays 16, because the game uses it to choose how to convert textures, and textures stay 16-bit. Windows XP and older keep the 16-bit mode, for the same reason as in part 8.
+
+A DirectDraw trace of a race under Wine shows no `Lock` or `Blt` on any surface after the loading screen, so nothing else depends on the screen's format while racing. The 2D effects that do assume 16-bit pixels on the screen's format, `FUN_0043AE50`, `FUN_0043AF60`, `FUN_00440DF0` and `FUN_00440FB0`, are never called.
+
+The one place that matters is the loading screen. `FUN_004409D0` loads its picture through `FUN_004C00B0` in the screen's own pixel format, and that function only writes 16 bits per pixel, which at 32 bits gave a half-width picture in the wrong colors. `image_pixel` replaces the conversion and store of each pixel there, and writes a whole pixel when the format has 32 bits.
+
+The race, loading screen, countdown, pause and quit screens looked right under Wine at 32 bits, over seven minutes of driving, and races later ran through to the finish screen. Wine says nothing about the gain on Windows: with software rendering at 1280x720 the 32-bit mode ran at 245 FPS against 288 at 16 bits, because that renderer writes twice the bytes.
+
+## Patch part 11: cars that get hung up
+
+After parts 8 to 10 a test at 165 FPS on real hardware still showed the player's car with its front wheels lifted, and a racer that floated in the air and did not come back to the road. A run under Wine at 165 FPS caught the same thing. The racer drove up the side of one of the wooden jump ramps at 16 units per second, its y went from 2 to 25 in 1.6 seconds, and it then stayed at the same spot for the last 118 seconds of the run, with its wheels spinning freely at about 62 radians per second.
+
+### Why a car stays up there
+
+`FUN_00429710` builds these cars, and `FUN_004A14F0` moves the center of mass to the height stored in the object at `+0x78`. In Ipion's coordinates, where y points down, the wheels end up 0.6 to 1.3 units above the center of mass. Measured against the road, the center of mass is below the road surface. That keeps a car from rolling over in corners, but it has side effects:
+
+- A body that lands on an edge has its center of mass under the point it rests on. It swings like a pendulum and doesn't tip off. At one spot the car swung between about 12 and 80 degrees nose up without falling.
+- Forces at the height of the road or higher pitch the nose up instead of down. That goes for a frontal hit, and for braking.
+
+The game's correction, `FUN_00419450` and its four callers, only reacts to a rotation above 10 radians per second for 0.25 seconds. A car that hangs still never triggers it. Friction contacts read from the physics engine show what is touching:
+
+```text
+pos(-21823.75 1.93 10689.37) up 0.982 forward y 0.191, speed 0
+  body touches 'obj254' (a static bridge part, 3 points)
+  wheel 0, 1, 2, 3 touch nothing
+  wheel y -0.28 on all four, the wheels hanging from their springs
+  wheel speed about 69 radians per second on all four
+```
+
+Under that bridge part the car looks lifted, and it can't drive because nothing touches the road.
+
+### This is not about the frame rate
+
+These hang-ups happen at 51 FPS as well, at the same spots. Two 900 second runs with the same bot:
+
+| | 165 FPS | 51 FPS |
+|---|---|---|
+| Mean distance of the three fastest racers | 96.5 thousand units | 96.6 thousand units |
+| Wheel y range of the player's car, 0.1% to 99.9% | -1.06 to 0.03 | -1.17 to 0.05 |
+| Checks of a stationary car that found all four wheels off the ground | 2 | 2 |
+| Checks of a stationary car that found one axle off the ground | 4 | 1 |
+
+The floating racer was seen once in about 2270 seconds at 165 FPS and not in the 900 seconds at 51 FPS, which is too little to say anything about how often it happens.
+
+### The fix
+
+`hung_check` replaces the call to `FUN_00403170` at `0x00428F30`, in the function that drives the player, the racers and the police, and runs right after it. It reads the friction contacts of each wheel from the physics engine (object `+0x28`). `FUN_00403170` itself uses a flag that the friction listener sets when a contact is created and clears when any contact is removed, so that flag can read 0 on a wheel that still touches something. It doesn't change what the turbo does with it.
+
+A car counts as hung when both of these hold:
+
+- its speed is below 1.5 units per second;
+- no front wheel or no rear wheel touches anything, or the y of its up vector is below 0.5.
+
+After 3 seconds of that it calls `FUN_0040E5A0`, the same function the Enter key and the game's own correction use, which puts the car 20 units above a free spot on the road. The times are in `HUNG_TIMES` at `0x00751F40`, one for each of the 19 racer slots and one for the player.
+
+A car that can still move doesn't count, as its speed goes above the limit. That includes a car with its front in the air that reverses out on its rear wheels.
+
+### Measurements
+
+Drives with the player's car under Wine at 165 FPS, from the same spot and heading with the gas held down, with a test build that can place the car:
+
+| Build | Result |
+|---|---|
+| Without `hung_check`, first drive | hangs at y = 21.8 on the side of the ramp, one wheel touching, and is still there after 18 seconds |
+| Without `hung_check`, second drive | hangs at y = 44.2, no wheel touching, and is still there after 18 seconds |
+| With `hung_check` | hangs at y = 21.7, and is back on the road 3 seconds after it stopped |
+
+Two whole races with the bot, with `hung_check`, both up to the finish screen:
+
+| Frame rate | Race took | `hung_check` moved |
+|---|---|---|
+| 165 FPS | 471 s | a racer lying on its side against a canal wall; the player hanging at y = 34 at the end of a ramp; the player again 3 seconds later, see below |
+| 51 FPS | 431 s | nothing |
+
+It moved no car that stood on its wheels, in these races or at the start. The reset itself can put a car on an edge or inside something, because `FUN_0040E5A0` only checks for other vehicles. In the race at 165 FPS the first reset left the player's car at y = 20 with no wheel touching. Without this part a car stays there, even after pressing Enter. `hung_check` tried again after 3 seconds and the game chose the next free spot.
+
+### What this doesn't establish
+
+- The numbers are from Wine with software rendering, a bot and test placements. The author checked the result in-game before the release, without these measurements. What lifted the green car in the test on real hardware wasn't seen, only the same kind of thing.
+- A car can still hang for those 3 seconds, and a car with both axles on something, like on top of another car or pressed against a wall, doesn't count as hung. Enter still works for those.
+- A frontal hit still lifts the nose, as it follows from where the center of mass is. Moving that would change how every car drives.
 
 ## All added and changed bytes
 
 The added code is built from [`A2Racer4Fixes_source/spel_patch.asm`](A2Racer4Fixes_source/spel_patch.asm). It goes in unused space at the end of `.text`, file offset `0x175500`, VA `0x00575500`, and the section's virtual size is raised so that space is certainly mapped. That space must be all zero before patching. A `spel.dat` from v1.2.0 has older code there, so the patcher starts from the copy in `4x3_backup` in that case.
 
-1644 bytes at `0x175500`:
+1984 bytes at `0x175500`:
 
 ```text
 83 7C 24 04 03 75 60 A1 26 B8 73 00 83 F8 FF 74 56 69 C0 B0 00 00 00 03
@@ -452,13 +540,13 @@ B4 B4 73 00 50 8B 08 FF 51 5C 6A 05 6A 19 A1 B4 B4 73 00 50 8B 08 FF 51
 8B 08 FF 51 58 6A 00 6A 0F A1 B4 B4 73 00 50 8B 08 FF 51 5C FF 74 24 14
 FF 74 24 14 FF 74 24 14 FF 74 24 14 8B 04 24 8B 08 FF 51 30 5A 50 52 6A
 0F A1 B4 B4 73 00 50 8B 08 FF 51 5C 58 C2 10 00 8B 44 24 04 8B 08 FF 61
-30 60 68 A4 5A 57 00 FF 15 A0 60 57 00 89 C6 85 F6 74 12 68 C4 5A 57 00
-56 FF 15 FC 60 57 00 85 C0 74 02 FF D0 8B 1D 6C 5B 57 00 8B 2D 70 5B 57
+30 60 68 F8 5B 57 00 FF 15 A0 60 57 00 89 C6 85 F6 74 12 68 18 5C 57 00
+56 FF 15 FC 60 57 00 85 C0 74 02 FF D0 8B 1D C0 5C 57 00 8B 2D C4 5C 57
 00 85 DB 75 61 81 EC 9C 00 00 00 89 E7 B9 27 00 00 00 31 C0 F3 AB 66 C7
-44 24 24 9C 00 85 F6 74 2B 68 AF 5A 57 00 56 FF 15 FC 60 57 00 85 C0 74
+44 24 24 9C 00 85 F6 74 2B 68 03 5C 57 00 56 FF 15 FC 60 57 00 85 C0 74
 1B 54 6A FF 6A 00 FF D0 85 C0 74 10 8B 5C 24 6C 8B 6C 24 70 85 DB 74 04
 85 ED 75 14 6A 00 FF 15 F4 61 57 00 89 C3 6A 01 FF 15 F4 61 57 00 89 C5
-81 C4 9C 00 00 00 BE 3C 5B 57 00 B9 0C 00 00 00 AD 89 18 89 68 04 E2 F8
+81 C4 9C 00 00 00 BE 90 5C 57 00 B9 0C 00 00 00 AD 89 18 89 68 04 E2 F8
 8D 04 AD 01 00 00 00 31 D2 B9 03 00 00 00 F7 F1 A3 38 1F 75 00 61 E9 CD
 29 EE FF 50 A1 98 37 5B 00 8D 04 40 50 DB 04 24 A1 9C 37 5B 00 C1 E0 02
 89 04 24 DA 34 24 58 D9 C0 D9 E0 D9 5E 14 DC C0 D9 5E 1C 58 C3 FF 74 24
@@ -467,11 +555,11 @@ FF 74 24 14 FF 74 24 14 FF 74 24 14 8B 04 24 8B 08 FF 51 30 5A 50 52 6A
 C1 50 DB 04 24 58 8B 4C 24 10 D8 01 D9 19 58 C2 0C 00 A1 98 37 5B 00 8D
 04 40 8B 0D 9C 37 5B 00 8D 14 8D 00 00 00 00 29 D0 69 C0 40 1F 00 00 6B
 C9 63 89 CA D1 EA 85 C0 79 02 F7 DA 01 D0 99 F7 F9 C3 56 57 89 C6 83 EC
-40 89 E2 6A 40 52 68 34 A0 5A 00 56 E8 47 E5 F4 FF 83 C4 10 89 E0 BF D7
-5A 57 00 E8 6A 00 00 00 74 58 89 F0 BF F0 5A 57 00 E8 5C 00 00 00 74 4A
-89 F0 BF 07 5B 57 00 E8 4E 00 00 00 74 3C 89 F0 BF 16 5B 57 00 E8 40 00
-00 00 74 2E 89 E0 BF E3 5A 57 00 E8 32 00 00 00 74 27 89 F0 BF 25 5B 57
-00 E8 2F 00 00 00 74 19 89 F0 BF 34 5B 57 00 E8 21 00 00 00 74 0B 31 C0
+40 89 E2 6A 40 52 68 34 A0 5A 00 56 E8 47 E5 F4 FF 83 C4 10 89 E0 BF 2B
+5C 57 00 E8 6A 00 00 00 74 58 89 F0 BF 44 5C 57 00 E8 5C 00 00 00 74 4A
+89 F0 BF 5B 5C 57 00 E8 4E 00 00 00 74 3C 89 F0 BF 6A 5C 57 00 E8 40 00
+00 00 74 2E 89 E0 BF 37 5C 57 00 E8 32 00 00 00 74 27 89 F0 BF 79 5C 57
+00 E8 2F 00 00 00 74 19 89 F0 BF 88 5C 57 00 E8 21 00 00 00 74 0B 31 C0
 EB 0A B8 01 00 00 00 EB 03 83 C8 FF 83 C4 40 5F 5E C3 E8 06 00 00 00 75
 03 80 38 00 C3 57 8A 0F 84 C9 74 17 8A 28 80 FD 61 72 08 80 FD 7A 77 03
 80 ED 20 38 CD 75 04 40 47 EB E3 5F C3 56 8B 74 24 0C FF 15 AC 60 57 00
@@ -486,7 +574,7 @@ A3 18 1F 75 00 C7 05 1C 1F 75 00 01 00 00 00 2B 05 18 1F 75 00 C3 D9 C0
 DC 25 20 1F 75 00 D8 76 04 D9 5E 0C DD 15 20 1F 75 00 D8 76 04 D9 5E 08
 C3 D9 44 24 04 8B 44 24 04 89 41 78 DC 05 28 1F 75 00 DD 15 28 1F 75 00
 D9 51 74 83 EC 08 DD 1C 24 8B 49 14 B8 80 83 4F 00 FF D0 C2 04 00 50 51
-B9 B0 28 71 00 B8 00 68 4A 00 FF D0 D8 0D 9C 5A 57 00 D9 E8 D8 D1 DF E0
+B9 B0 28 71 00 B8 00 68 4A 00 FF D0 D8 0D E4 5B 57 00 D9 E8 D8 D1 DF E0
 9E 73 02 D9 C9 DD D8 59 58 C3 D8 3D 18 63 57 00 E8 D1 FF FF FF DE C9 C3
 E8 C9 FF FF FF D9 C0 D8 4C 24 04 D9 5C 24 04 D9 C0 D8 4C 24 08 D9 5C 24
 08 D8 4C 24 0C D9 5C 24 0C 56 89 CE 8B 46 10 68 F6 97 4A 00 C3 89 44 24
@@ -494,22 +582,36 @@ E8 C9 FF FF FF D9 C0 D8 4C 24 04 D9 5C 24 04 D9 C0 D8 4C 24 08 D9 5C 24
 81 80 00 00 00 D9 99 80 00 00 00 D9 44 24 10 D8 81 88 00 00 00 D9 99 88
 00 00 00 68 BE 5C 4A 00 C3 51 B8 80 96 4F 00 FF D0 59 31 C0 89 01 89 41
 04 89 41 08 C3 B9 30 1F 75 00 EB 05 B9 34 1F 75 00 D8 01 D9 C0 B8 24 85
-55 00 FF D0 50 DA 24 24 58 D9 19 C3 83 39 00 74 46 51 83 EC 08 54 FF 15
-58 60 57 00 8B 4C 24 08 DF 2C 24 DF 2D 00 1F 75 00 DE E9 D8 71 04 D8 1D
-A0 5A 57 00 DF E0 9E 73 11 A1 00 1F 75 00 0B 05 04 1F 75 00 74 04 F3 90
-EB CB 58 A3 00 1F 75 00 58 A3 04 1F 75 00 59 E9 64 0C F3 FF 00 00 C8 41
-88 88 08 3C 55 53 45 52 33 32 2E 44 4C 4C 00 45 6E 75 6D 44 69 73 70 6C
-61 79 53 65 74 74 69 6E 67 73 41 00 53 65 74 50 72 6F 63 65 73 73 44 50
-49 41 77 61 72 65 00 53 50 45 45 44 4F 4D 45 54 45 52 00 43 4F 4D 4D 55
-4E 49 43 41 54 4F 52 00 53 54 52 49 4E 47 5F 52 41 43 45 5F 54 49 4D 45
-5F 56 41 4C 55 45 00 53 54 52 49 4E 47 5F 43 55 52 5F 4C 41 50 00 53 54
-52 49 4E 47 5F 43 55 52 5F 50 4F 53 00 4F 56 4C 5F 50 4F 52 54 52 41 49
-54 53 5F 00 50 4C 41 59 45 52 5F 00 98 37 5B 00 EC 37 5B 00 00 38 5B 00
-14 38 5B 00 64 38 5B 00 78 38 5B 00 8C 38 5B 00 A0 38 5B 00 B4 38 5B 00
-04 39 5B 00 18 39 5B 00 2C 39 5B 00
+55 00 FF D0 50 DA 24 24 58 D9 19 C3 51 B9 3C 1F 75 00 E8 E2 FF FF FF 59
+C3 FF 15 AC 60 57 00 8B 15 A0 37 5B 00 83 FA 10 75 09 3C 06 72 05 BA 20
+00 00 00 C3 8B 44 24 5C 83 78 0C 20 74 19 FF 74 24 08 FF 74 24 08 E8 25
+27 F5 FF 83 C4 08 66 89 07 83 C7 02 C2 08 00 FF 74 24 04 E8 40 24 F5 FF
+83 C4 04 89 07 83 C7 04 C2 08 00 FF 74 24 04 B8 70 31 40 00 FF D0 60 8B
+74 24 24 31 D2 31 C9 8B 44 8E 34 8B 40 08 83 78 28 00 74 07 89 C8 D1 E8
+40 09 C2 41 83 F9 04 72 E6 89 D7 89 E8 2D 7C EA 5C 00 31 D2 B9 94 02 00
+00 F7 F1 83 F8 13 72 05 B8 13 00 00 00 8D 34 85 40 1F 75 00 8B 0D 50 5E
+71 00 01 D9 D9 81 BC 00 00 00 DC C8 D9 81 C0 00 00 00 DC C8 DE C1 D9 81
+C4 00 00 00 DC C8 DE C1 D8 1D EC 5B 57 00 DF E0 9E 73 5F 83 FF 03 75 1D
+8B 41 24 69 C0 A9 00 00 00 03 05 D0 B0 73 00 D9 40 24 D8 1D F0 5B 57 00
+DF E0 9E 73 3D B9 B0 28 71 00 B8 00 68 4A 00 FF D0 D8 06 D9 16 D8 1D F4
+5B 57 00 DF E0 9E 72 28 6A 00 8B 0D 50 5E 71 00 FF 74 19 34 89 D8 31 D2
+B9 F0 00 00 00 F7 F1 50 B8 A0 E5 40 00 FF D0 83 C4 0C C7 06 00 00 00 00
+61 C2 04 00 83 39 00 74 46 51 83 EC 08 54 FF 15 58 60 57 00 8B 4C 24 08
+DF 2C 24 DF 2D 00 1F 75 00 DE E9 D8 71 04 D8 1D E8 5B 57 00 DF E0 9E 73
+11 A1 00 1F 75 00 0B 05 04 1F 75 00 74 04 F3 90 EB CB 58 A3 00 1F 75 00
+58 A3 04 1F 75 00 59 E9 1C 0B F3 FF 00 00 C8 41 89 88 88 3B 00 00 10 40
+00 00 00 3F 00 00 40 40 55 53 45 52 33 32 2E 44 4C 4C 00 45 6E 75 6D 44
+69 73 70 6C 61 79 53 65 74 74 69 6E 67 73 41 00 53 65 74 50 72 6F 63 65
+73 73 44 50 49 41 77 61 72 65 00 53 50 45 45 44 4F 4D 45 54 45 52 00 43
+4F 4D 4D 55 4E 49 43 41 54 4F 52 00 53 54 52 49 4E 47 5F 52 41 43 45 5F
+54 49 4D 45 5F 56 41 4C 55 45 00 53 54 52 49 4E 47 5F 43 55 52 5F 4C 41
+50 00 53 54 52 49 4E 47 5F 43 55 52 5F 50 4F 53 00 4F 56 4C 5F 50 4F 52
+54 52 41 49 54 53 5F 00 50 4C 41 59 45 52 5F 00 98 37 5B 00 EC 37 5B 00
+00 38 5B 00 14 38 5B 00 64 38 5B 00 78 38 5B 00 8C 38 5B 00 A0 38 5B 00
+B4 38 5B 00 04 39 5B 00 18 39 5B 00 2C 39 5B 00
 ```
 
-After it, at `0x175B6C`, come two 32-bit values: a fixed width and height, or `0` and `0` to follow the display.
+After it, at `0x175CC0`, come two 32-bit values: a fixed width and height, or `0` and `0` to follow the display.
 
 | File offset | Original | Patched | What |
 |---|---|---|---|
@@ -545,7 +647,7 @@ After it, at `0x175B6C`, come two 32-bit values: a fixed width and height, or `0
 | `0x0A6850` | `FF 15 58 60 57 00` | `E8 70 F0 0C 00 90` | timer counter |
 | `0x0A673B` | `FF 15 50 62 57 00` | `E8 D1 F1 0C 00 90` | timer ticks |
 | `0x0A687E` | `FF 15 50 62 57 00` | `E8 8E F0 0C 00 90` | timer ticks |
-| `0x04CB9E` | `E8 5D 9B 05 00` | `E8 A9 8E 12 00` | frame limit |
+| `0x04CB9E` | `E8 5D 9B 05 00` | `E8 F1 8F 12 00` | frame limit |
 | `0x0A6751` | `D8 76 04 D9 C0 D8 66` | `E8 E0 F1 0C 00 EB 07` | timer step |
 | `0x0A6894` | `D8 76 04 D9 C0 D8 66` | `E8 9D F0 0C 00 EB 07` | timer step |
 | `0x0A45D0` | `D9 44 24 04 D8` | `E9 7C 13 0D 00` | world time |
@@ -556,6 +658,13 @@ After it, at `0x175B6C`, come two 32-bit values: a fixed width and height, or `0
 | `0x0A5D9C` | `E8 DF 38 05 00` | `E8 78 FC 0C 00` | driving force |
 | `0x06F2C6` | `E8 59 92 0E 00` | `E8 62 67 10 00` | gas pedal |
 | `0x06F308` | `E8 17 92 0E 00` | `E8 27 67 10 00` | brake pedal |
+| `0x030F36` | `E8 E9 75 12 00` | `E8 11 4B 14 00` | trailer fade |
+| `0x030F5D` | `E8 C2 75 12 00` | `E8 EA 4A 14 00` | trailer fade |
+| `0x030FA4` | `E8 7B 75 12 00` | `E8 A3 4A 14 00` | trailer fade |
+| `0x0310E6` | `E8 39 74 12 00` | `E8 61 49 14 00` | trailer fade |
+| `0x0C58AB` | `8B 15 A0 37 5B 00` | `E8 A9 01 0B 00 90` | display depth |
+| `0x0C03C0` | `E8 EB 7D 00 00 83 C4` | `E8 AF 56 0B 00 EB 07` | image pixel |
+| `0x028F30` | `E8 3B A2 FD FF` | `E8 76 CB 14 00` | hung car |
 | `0x000248` | `08 44 1C 00` | `00 50 1C 00` | data section size |
 | `0x0001F8` | `4A 44 17 00` | `00 50 17 00` | code section size |
 | `0x0CD478` | `68 70` | `EB B6` | CD check |
@@ -744,13 +853,13 @@ B4 B4 73 00 50 8B 08 FF 51 5C 6A 05 6A 19 A1 B4 B4 73 00 50 8B 08 FF 51
 8B 08 FF 51 58 6A 00 6A 0F A1 B4 B4 73 00 50 8B 08 FF 51 5C FF 74 24 14
 FF 74 24 14 FF 74 24 14 FF 74 24 14 8B 04 24 8B 08 FF 51 30 5A 50 52 6A
 0F A1 B4 B4 73 00 50 8B 08 FF 51 5C 58 C2 10 00 8B 44 24 04 8B 08 FF 61
-30 60 68 A4 5A 57 00 FF 15 A0 60 57 00 89 C6 85 F6 74 12 68 C4 5A 57 00
-56 FF 15 FC 60 57 00 85 C0 74 02 FF D0 8B 1D 6C 5B 57 00 8B 2D 70 5B 57
+30 60 68 F8 5B 57 00 FF 15 A0 60 57 00 89 C6 85 F6 74 12 68 18 5C 57 00
+56 FF 15 FC 60 57 00 85 C0 74 02 FF D0 8B 1D C0 5C 57 00 8B 2D C4 5C 57
 00 85 DB 75 61 81 EC 9C 00 00 00 89 E7 B9 27 00 00 00 31 C0 F3 AB 66 C7
-44 24 24 9C 00 85 F6 74 2B 68 AF 5A 57 00 56 FF 15 FC 60 57 00 85 C0 74
+44 24 24 9C 00 85 F6 74 2B 68 03 5C 57 00 56 FF 15 FC 60 57 00 85 C0 74
 1B 54 6A FF 6A 00 FF D0 85 C0 74 10 8B 5C 24 6C 8B 6C 24 70 85 DB 74 04
 85 ED 75 14 6A 00 FF 15 F4 61 57 00 89 C3 6A 01 FF 15 F4 61 57 00 89 C5
-81 C4 9C 00 00 00 BE 3C 5B 57 00 B9 0C 00 00 00 AD 89 18 89 68 04 E2 F8
+81 C4 9C 00 00 00 BE 90 5C 57 00 B9 0C 00 00 00 AD 89 18 89 68 04 E2 F8
 8D 04 AD 01 00 00 00 31 D2 B9 03 00 00 00 F7 F1 A3 38 1F 75 00 61 E9 CD
 29 EE FF 50 A1 98 37 5B 00 8D 04 40 50 DB 04 24 A1 9C 37 5B 00 C1 E0 02
 89 04 24 DA 34 24 58 D9 C0 D9 E0 D9 5E 14 DC C0 D9 5E 1C 58 C3 FF 74 24
@@ -759,11 +868,11 @@ FF 74 24 14 FF 74 24 14 FF 74 24 14 8B 04 24 8B 08 FF 51 30 5A 50 52 6A
 C1 50 DB 04 24 58 8B 4C 24 10 D8 01 D9 19 58 C2 0C 00 A1 98 37 5B 00 8D
 04 40 8B 0D 9C 37 5B 00 8D 14 8D 00 00 00 00 29 D0 69 C0 40 1F 00 00 6B
 C9 63 89 CA D1 EA 85 C0 79 02 F7 DA 01 D0 99 F7 F9 C3 56 57 89 C6 83 EC
-40 89 E2 6A 40 52 68 34 A0 5A 00 56 E8 47 E5 F4 FF 83 C4 10 89 E0 BF D7
-5A 57 00 E8 6A 00 00 00 74 58 89 F0 BF F0 5A 57 00 E8 5C 00 00 00 74 4A
-89 F0 BF 07 5B 57 00 E8 4E 00 00 00 74 3C 89 F0 BF 16 5B 57 00 E8 40 00
-00 00 74 2E 89 E0 BF E3 5A 57 00 E8 32 00 00 00 74 27 89 F0 BF 25 5B 57
-00 E8 2F 00 00 00 74 19 89 F0 BF 34 5B 57 00 E8 21 00 00 00 74 0B 31 C0
+40 89 E2 6A 40 52 68 34 A0 5A 00 56 E8 47 E5 F4 FF 83 C4 10 89 E0 BF 2B
+5C 57 00 E8 6A 00 00 00 74 58 89 F0 BF 44 5C 57 00 E8 5C 00 00 00 74 4A
+89 F0 BF 5B 5C 57 00 E8 4E 00 00 00 74 3C 89 F0 BF 6A 5C 57 00 E8 40 00
+00 00 74 2E 89 E0 BF 37 5C 57 00 E8 32 00 00 00 74 27 89 F0 BF 79 5C 57
+00 E8 2F 00 00 00 74 19 89 F0 BF 88 5C 57 00 E8 21 00 00 00 74 0B 31 C0
 EB 0A B8 01 00 00 00 EB 03 83 C8 FF 83 C4 40 5F 5E C3 E8 06 00 00 00 75
 03 80 38 00 C3 57 8A 0F 84 C9 74 17 8A 28 80 FD 61 72 08 80 FD 7A 77 03
 80 ED 20 38 CD 75 04 40 47 EB E3 5F C3 56 8B 74 24 0C FF 15 AC 60 57 00
@@ -778,7 +887,7 @@ A3 18 1F 75 00 C7 05 1C 1F 75 00 01 00 00 00 2B 05 18 1F 75 00 C3 D9 C0
 DC 25 20 1F 75 00 D8 76 04 D9 5E 0C DD 15 20 1F 75 00 D8 76 04 D9 5E 08
 C3 D9 44 24 04 8B 44 24 04 89 41 78 DC 05 28 1F 75 00 DD 15 28 1F 75 00
 D9 51 74 83 EC 08 DD 1C 24 8B 49 14 B8 80 83 4F 00 FF D0 C2 04 00 50 51
-B9 B0 28 71 00 B8 00 68 4A 00 FF D0 D8 0D 9C 5A 57 00 D9 E8 D8 D1 DF E0
+B9 B0 28 71 00 B8 00 68 4A 00 FF D0 D8 0D E4 5B 57 00 D9 E8 D8 D1 DF E0
 9E 73 02 D9 C9 DD D8 59 58 C3 D8 3D 18 63 57 00 E8 D1 FF FF FF DE C9 C3
 E8 C9 FF FF FF D9 C0 D8 4C 24 04 D9 5C 24 04 D9 C0 D8 4C 24 08 D9 5C 24
 08 D8 4C 24 0C D9 5C 24 0C 56 89 CE 8B 46 10 68 F6 97 4A 00 C3 89 44 24
@@ -786,19 +895,33 @@ E8 C9 FF FF FF D9 C0 D8 4C 24 04 D9 5C 24 04 D9 C0 D8 4C 24 08 D9 5C 24
 81 80 00 00 00 D9 99 80 00 00 00 D9 44 24 10 D8 81 88 00 00 00 D9 99 88
 00 00 00 68 BE 5C 4A 00 C3 51 B8 80 96 4F 00 FF D0 59 31 C0 89 01 89 41
 04 89 41 08 C3 B9 30 1F 75 00 EB 05 B9 34 1F 75 00 D8 01 D9 C0 B8 24 85
-55 00 FF D0 50 DA 24 24 58 D9 19 C3 83 39 00 74 46 51 83 EC 08 54 FF 15
-58 60 57 00 8B 4C 24 08 DF 2C 24 DF 2D 00 1F 75 00 DE E9 D8 71 04 D8 1D
-A0 5A 57 00 DF E0 9E 73 11 A1 00 1F 75 00 0B 05 04 1F 75 00 74 04 F3 90
-EB CB 58 A3 00 1F 75 00 58 A3 04 1F 75 00 59 E9 64 0C F3 FF 00 00 C8 41
-88 88 08 3C 55 53 45 52 33 32 2E 44 4C 4C 00 45 6E 75 6D 44 69 73 70 6C
-61 79 53 65 74 74 69 6E 67 73 41 00 53 65 74 50 72 6F 63 65 73 73 44 50
-49 41 77 61 72 65 00 53 50 45 45 44 4F 4D 45 54 45 52 00 43 4F 4D 4D 55
-4E 49 43 41 54 4F 52 00 53 54 52 49 4E 47 5F 52 41 43 45 5F 54 49 4D 45
-5F 56 41 4C 55 45 00 53 54 52 49 4E 47 5F 43 55 52 5F 4C 41 50 00 53 54
-52 49 4E 47 5F 43 55 52 5F 50 4F 53 00 4F 56 4C 5F 50 4F 52 54 52 41 49
-54 53 5F 00 50 4C 41 59 45 52 5F 00 98 37 5B 00 EC 37 5B 00 00 38 5B 00
-14 38 5B 00 64 38 5B 00 78 38 5B 00 8C 38 5B 00 A0 38 5B 00 B4 38 5B 00
-04 39 5B 00 18 39 5B 00 2C 39 5B 00
+55 00 FF D0 50 DA 24 24 58 D9 19 C3 51 B9 3C 1F 75 00 E8 E2 FF FF FF 59
+C3 FF 15 AC 60 57 00 8B 15 A0 37 5B 00 83 FA 10 75 09 3C 06 72 05 BA 20
+00 00 00 C3 8B 44 24 5C 83 78 0C 20 74 19 FF 74 24 08 FF 74 24 08 E8 25
+27 F5 FF 83 C4 08 66 89 07 83 C7 02 C2 08 00 FF 74 24 04 E8 40 24 F5 FF
+83 C4 04 89 07 83 C7 04 C2 08 00 FF 74 24 04 B8 70 31 40 00 FF D0 60 8B
+74 24 24 31 D2 31 C9 8B 44 8E 34 8B 40 08 83 78 28 00 74 07 89 C8 D1 E8
+40 09 C2 41 83 F9 04 72 E6 89 D7 89 E8 2D 7C EA 5C 00 31 D2 B9 94 02 00
+00 F7 F1 83 F8 13 72 05 B8 13 00 00 00 8D 34 85 40 1F 75 00 8B 0D 50 5E
+71 00 01 D9 D9 81 BC 00 00 00 DC C8 D9 81 C0 00 00 00 DC C8 DE C1 D9 81
+C4 00 00 00 DC C8 DE C1 D8 1D EC 5B 57 00 DF E0 9E 73 5F 83 FF 03 75 1D
+8B 41 24 69 C0 A9 00 00 00 03 05 D0 B0 73 00 D9 40 24 D8 1D F0 5B 57 00
+DF E0 9E 73 3D B9 B0 28 71 00 B8 00 68 4A 00 FF D0 D8 06 D9 16 D8 1D F4
+5B 57 00 DF E0 9E 72 28 6A 00 8B 0D 50 5E 71 00 FF 74 19 34 89 D8 31 D2
+B9 F0 00 00 00 F7 F1 50 B8 A0 E5 40 00 FF D0 83 C4 0C C7 06 00 00 00 00
+61 C2 04 00 83 39 00 74 46 51 83 EC 08 54 FF 15 58 60 57 00 8B 4C 24 08
+DF 2C 24 DF 2D 00 1F 75 00 DE E9 D8 71 04 D8 1D E8 5B 57 00 DF E0 9E 73
+11 A1 00 1F 75 00 0B 05 04 1F 75 00 74 04 F3 90 EB CB 58 A3 00 1F 75 00
+58 A3 04 1F 75 00 59 E9 1C 0B F3 FF 00 00 C8 41 89 88 88 3B 00 00 10 40
+00 00 00 3F 00 00 40 40 55 53 45 52 33 32 2E 44 4C 4C 00 45 6E 75 6D 44
+69 73 70 6C 61 79 53 65 74 74 69 6E 67 73 41 00 53 65 74 50 72 6F 63 65
+73 73 44 50 49 41 77 61 72 65 00 53 50 45 45 44 4F 4D 45 54 45 52 00 43
+4F 4D 4D 55 4E 49 43 41 54 4F 52 00 53 54 52 49 4E 47 5F 52 41 43 45 5F
+54 49 4D 45 5F 56 41 4C 55 45 00 53 54 52 49 4E 47 5F 43 55 52 5F 4C 41
+50 00 53 54 52 49 4E 47 5F 43 55 52 5F 50 4F 53 00 4F 56 4C 5F 50 4F 52
+54 52 41 49 54 53 5F 00 50 4C 41 59 45 52 5F 00 98 37 5B 00 EC 37 5B 00
+00 38 5B 00 14 38 5B 00 64 38 5B 00 78 38 5B 00 8C 38 5B 00 A0 38 5B 00
+B4 38 5B 00 04 39 5B 00 18 39 5B 00 2C 39 5B 00
 """)
 if data[CODE_OFFSET:CODE_OFFSET + len(CODE)] not in (bytes(len(CODE)), CODE):
     raise RuntimeError("Unexpected bytes where the code goes. Wrong executable version?")
@@ -839,7 +962,7 @@ for offset, old, new in [
     (0x0A6850, "FF 15 58 60 57 00", "E8 70 F0 0C 00 90"),
     (0x0A673B, "FF 15 50 62 57 00", "E8 D1 F1 0C 00 90"),
     (0x0A687E, "FF 15 50 62 57 00", "E8 8E F0 0C 00 90"),
-    (0x04CB9E, "E8 5D 9B 05 00", "E8 A9 8E 12 00"),
+    (0x04CB9E, "E8 5D 9B 05 00", "E8 F1 8F 12 00"),
     (0x0A6751, "D8 76 04 D9 C0 D8 66", "E8 E0 F1 0C 00 EB 07"),
     (0x0A6894, "D8 76 04 D9 C0 D8 66", "E8 9D F0 0C 00 EB 07"),
     (0x0A45D0, "D9 44 24 04 D8", "E9 7C 13 0D 00"),
@@ -850,6 +973,13 @@ for offset, old, new in [
     (0x0A5D9C, "E8 DF 38 05 00", "E8 78 FC 0C 00"),
     (0x06F2C6, "E8 59 92 0E 00", "E8 62 67 10 00"),
     (0x06F308, "E8 17 92 0E 00", "E8 27 67 10 00"),
+    (0x030F36, "E8 E9 75 12 00", "E8 11 4B 14 00"),
+    (0x030F5D, "E8 C2 75 12 00", "E8 EA 4A 14 00"),
+    (0x030FA4, "E8 7B 75 12 00", "E8 A3 4A 14 00"),
+    (0x0310E6, "E8 39 74 12 00", "E8 61 49 14 00"),
+    (0x0C58AB, "8B 15 A0 37 5B 00", "E8 A9 01 0B 00 90"),
+    (0x0C03C0, "E8 EB 7D 00 00 83 C4", "E8 AF 56 0B 00 EB 07"),
+    (0x028F30, "E8 3B A2 FD FF", "E8 76 CB 14 00"),
     (0x000248, "08 44 1C 00", "00 50 1C 00"),
     (0x0001F8, "4A 44 17 00", "00 50 17 00"),
     (0x0CD478, "68 70", "EB B6"),
@@ -951,11 +1081,11 @@ Check both changes in [Patch part 7](#patch-part-7-cd-check-removal). The menu a
 
 ### The game stops with "could not set display mode"
 
-The display's current resolution is not available at 16-bit color. Run the patcher again and type a fixed resolution that is.
+The display's current resolution is not available at 32-bit color, or at 16-bit color on Windows XP and older. Run the patcher again and type a fixed resolution that is.
 
 ### Cars lift up or lose all speed
 
-Check the rows for the timer, the world time, the traffic mass, the driving force and the pedals in [All added and changed bytes](#all-added-and-changed-bytes). See [Patch part 9](#patch-part-9-car-physics). A collision can still throw a car, and the Enter reset can drop your car on top of another one.
+Check the rows for the timer, the world time, the traffic mass, the driving force, the pedals and the hung car in [All added and changed bytes](#all-added-and-changed-bytes). See [Patch part 9](#patch-part-9-car-physics) and [Patch part 11](#patch-part-11-cars-that-get-hung-up). A collision can still throw a car, and the Enter reset can drop your car on top of another one.
 
 ### The countdown before the race is missing
 

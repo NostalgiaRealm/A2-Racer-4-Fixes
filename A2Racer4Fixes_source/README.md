@@ -78,7 +78,7 @@ The resolution is not in the patched file unless you fix one: the added code rea
 
 File names are matched case-insensitively, and quoted, escaped and `~` paths are accepted. The 32-bit Windows version uses the non-Unicode file functions, so a game folder with characters outside the system's code page gives an error there.
 
-The patched file also contains the texture memory crash fix for modern graphics cards, the transparency fix, the CD check removal, the deeper Z-buffer, and the car physics fixes. The patcher also moves `menu.exe` to `4x3_backup` and writes a copy without the CD check; a file that already has the change is left alone. Every code change is checked against the expected original bytes first, so an unknown `spel.dat` version is left untouched. Running the patcher on an already patched `spel.dat` updates it to the current patch.
+The patched file also contains the texture memory crash fix for modern graphics cards, the transparency fix, the CD check removal, the deeper Z-buffer, the car physics fixes, the 32-bit display mode and the check for cars that get hung up. The patcher also moves `menu.exe` to `4x3_backup` and writes a copy without the CD check; a file that already has the change is left alone. Every code change is checked against the expected original bytes first, so an unknown `spel.dat` version is left untouched. Running the patcher on an already patched `spel.dat` updates it to the current patch.
 
 On Windows the patcher only runs with administrator rights; without them it stops before changing anything. Windows 95, 98 and Me have no such rights. The Linux version needs no root rights, because the game lives in your own Wine prefix.
 

@@ -29,6 +29,7 @@ org 0x575500
 
 %define screen_width  dword [0x5b3798]  ; the current display mode
 %define screen_height dword [0x5b379c]
+%define screen_depth  dword [0x5b37a0]
 %define reference_width dword [REFERENCE_WIDTH]
 
 SELECT_FORMAT equ 0x4c2b90
@@ -52,11 +53,21 @@ TIMER_SECONDS     equ 8                 ; float
 TIMER_STEP        equ 12                ; float
 
 FLOAT_TO_INTEGER  equ 0x558524          ; takes st0, rounds toward zero, returns eax
+CONVERT_COLOR     equ 0x4c81b0          ; color, its depth; returns the pixel in 16 bits
+CONVERT_COLOR_FULL equ 0x4c7ee0         ; 24-bit color; returns the whole pixel
 STEP_WORLD_UNTIL  equ 0x4f8380          ; ecx = world, double on the stack
 NORMALIZE_VECTOR  equ 0x4f9680          ; ecx = vector, returns its old length in st0
 FLOAT_ONE         equ 0x576318
 FORCE_SET_CONTINUE equ 0x4a5cbe
 TRAILER_PUSH_CONTINUE equ 0x4a97f6
+IMAGE_FORMAT      equ 0x5c                ; pixel format, on the stack in image_pixel
+FORMAT_BITS       equ 12                ; depth, in the pixel format
+WHEEL_TIMER       equ 0x403170          ; ecx = controls, physics object on the stack
+RESET_CAR         equ 0x40e5a0          ; car, its place on the road, 0
+RACER_CONTROLS    equ 0x5cea7c          ; the controls of the first racer
+RACER_CONTROLS_SIZE equ 0x294
+CAR_TABLE         equ 0x715e50
+OBJECT_TABLE      equ 0x73b0d0
 
 ; Free memory after the game's data, in the last page of its data section.
 LAST_FRAME   equ 0x751f00               ; counter at the start of the last frame
@@ -67,6 +78,9 @@ WORLD_TIME   equ 0x751f28               ; double, seconds simulated
 GAS_REST     equ 0x751f30               ; float, what the gas pedal value lost to rounding
 BRAKE_REST   equ 0x751f34               ; float, the same for the brake
 REFERENCE_WIDTH equ 0x751f38            ; 4:3 width for this height
+FADE_REST    equ 0x751f3c               ; float, what the fade of a trailer lost to rounding
+HUNG_TIMES   equ 0x751f40               ; floats, how long each car has hung, 20 in all
+HUNG_TIME_COUNT equ 20
 
 MODE_COUNT    equ 12
 
@@ -663,9 +677,145 @@ pedal_value:
     fstp dword [ecx]
     ret
 
+; The same for the fade of a trailer, which stopped moving above 128 frames per second.
+trailer_fade:
+    push ecx
+    mov ecx, FADE_REST
+    call pedal_value
+    pop ecx
+    ret
+
+; Replaces reading the depth for the call that sets the display mode. Windows 8 and newer
+; have no real 16-bit modes and convert every frame on its way to the screen, and that
+; cost grows with the resolution. From Windows Vista on, as for the deeper Z-buffer, ask
+; for 32 bits. The game keeps its own depth of 16, and its textures stay 16-bit.
+display_depth:
+    call [GetVersion]
+    mov edx, screen_depth
+    cmp edx, 16
+    jne .done
+    cmp al, 6
+    jb .done
+    mov edx, 32
+.done:
+    ret
+
+; Replaces the conversion and store of one pixel in the game's image loader, with the
+; color and its depth on the stack, and the place to write in edi. The loading picture
+; is the one image it loads in the format of the screen, and it only knew 16 bits.
+image_pixel:
+    mov eax, [esp+IMAGE_FORMAT]
+    cmp dword [eax+FORMAT_BITS], 32
+    je .whole
+    push dword [esp+8]
+    push dword [esp+8]
+    call CONVERT_COLOR
+    add esp, 8
+    mov [edi], ax
+    add edi, 2
+    ret 8
+.whole:
+    push dword [esp+4]
+    call CONVERT_COLOR_FULL
+    add esp, 4
+    mov [edi], eax
+    add edi, 4
+    ret 8
+
+; Replaces the call that counts how long no wheel has touched anything, in the function that
+; drives the player and the racers, with the car's controls in ebp and ecx, its physics object
+; on the stack and its offset in the car table in ebx. These cars have their centre of mass at
+; the bottom of the body, so a body that lands on an edge, such as the side of a jump ramp, does
+; not tip off it. The car then hangs there with its wheels spinning in the air and the game has
+; no way out, as the only correction it knows is for a car that spins. Put a car back on the road
+; when it stands still for HUNG_TIME seconds, with an axle in the air or tipped over.
+hung_check:
+    push dword [esp+4]
+    mov eax, WHEEL_TIMER
+    call eax
+    pushad
+    mov esi, [esp+36]                   ; the physics object
+    xor edx, edx                        ; 1: a front wheel touches, 2: a rear wheel touches
+    xor ecx, ecx
+.wheel:
+    mov eax, [esi+0x34+ecx*4]
+    mov eax, [eax+8]
+    cmp dword [eax+0x28], 0             ; friction contacts of this wheel
+    je .next_wheel
+    mov eax, ecx
+    shr eax, 1
+    inc eax
+    or edx, eax
+.next_wheel:
+    inc ecx
+    cmp ecx, 4
+    jb .wheel
+    mov edi, edx
+    mov eax, ebp                        ; a time for each racer, the last one for the player
+    sub eax, RACER_CONTROLS
+    xor edx, edx
+    mov ecx, RACER_CONTROLS_SIZE
+    div ecx
+    cmp eax, HUNG_TIME_COUNT - 1
+    jb .have_slot
+    mov eax, HUNG_TIME_COUNT - 1
+.have_slot:
+    lea esi, [HUNG_TIMES+eax*4]
+    mov ecx, [CAR_TABLE]
+    add ecx, ebx
+    fld dword [ecx+0xbc]                ; speed squared
+    fmul st0, st0
+    fld dword [ecx+0xc0]
+    fmul st0, st0
+    faddp st1, st0
+    fld dword [ecx+0xc4]
+    fmul st0, st0
+    faddp st1, st0
+    fcomp dword [hung_speed]
+    fnstsw ax
+    sahf
+    jae .clear
+    cmp edi, 3
+    jne .hung
+    mov eax, [ecx+0x24]
+    imul eax, eax, 0xa9
+    add eax, [OBJECT_TABLE]
+    fld dword [eax+0x24]                ; y of the car's up vector
+    fcomp dword [hung_up]
+    fnstsw ax
+    sahf
+    jae .clear
+.hung:
+    mov ecx, GAME_TIMER_OBJECT
+    mov eax, GAME_TIME_STEP
+    call eax
+    fadd dword [esi]
+    fst dword [esi]
+    fcomp dword [hung_time]
+    fnstsw ax
+    sahf
+    jb .done
+    push 0
+    mov ecx, [CAR_TABLE]
+    push dword [ecx+ebx+0x34]           ; its place on the road
+    mov eax, ebx
+    xor edx, edx
+    mov ecx, 0xf0
+    div ecx
+    push eax                            ; the car
+    mov eax, RESET_CAR
+    call eax
+    add esp, 12
+.clear:
+    mov dword [esi], 0
+.done:
+    popad
+    ret 4
+
 ; Replaces the call to the game timer at the start of every frame, which has the timer
-; object in ecx. Forces no longer depend on the frame rate, but some whole number
-; counters still do: the fade of a trailer stops moving above 128 frames per second.
+; object in ecx. Nothing that was checked needs a limit here any more. This keeps the
+; frame rate inside the range the physics were measured in, about 440 at most, and far
+; from where the game's whole milliseconds per frame round to nothing, at 1000.
 frame_limit:
     cmp dword [ecx], 0
     je .go                              ; no high resolution counter to wait with
@@ -698,7 +848,10 @@ frame_limit:
     jmp GAME_TIMER_UPDATE
 
 ai_frame_rate:      dd __float32__(25.0)
-frame_time:         dd __float32__(0.0083333333)
+frame_time:         dd __float32__(0.0041666667)
+hung_speed:         dd __float32__(2.25)    ; 1.5 units per second, squared
+hung_up:            dd __float32__(0.5)
+hung_time:          dd __float32__(3.0)
 user32_name:        db "USER32.DLL", 0
 enum_settings_name: db "EnumDisplaySettingsA", 0
 dpi_aware_name:     db "SetProcessDPIAware", 0

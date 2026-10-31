@@ -8,7 +8,9 @@ Fixes for the PC version of **A2 Racer 4**:
 - the game no longer needs its CD in the drive;
 - surfaces no longer flicker where they meet, from Windows Vista on;
 - cars no longer lift their nose, lose their drive or crawl on modern PCs: the car physics no longer depend on the frame rate, or on how long the PC or the game has been running;
-- the 3, 2, 1 before a race is back, after v1.1.0 to v1.4.0 of this patch lost it.
+- the 3, 2, 1 before a race is back, after v1.1.0 to v1.4.0 of this patch lost it;
+- from Windows Vista on the screen runs in 32-bit color instead of 16-bit, which Windows 8 and newer only emulate;
+- a car that gets hung up on an edge, with its wheels in the air, goes back on the road by itself.
 
 They consist of a patched `spel.dat` executable module that holds these fixes, a small patch to `menu.exe` for the CD check, and an automatic patcher called `A2Racer4Fixes`, for 64-bit and 32-bit Windows and Linux, that applies them to the game folder you choose. You run the patcher once.
 
@@ -47,13 +49,27 @@ On modern PCs cars could pull their nose up, lose their drive or crawl, and traf
 - **The turbo.** Between two physics steps only the force of the last frame counted, so the turbo of the player and the racers lost strength above 66 frames per second. Forces now add up until the next physics step, and are applied once.
 - **Gas and brake.** Above 300 frames per second the steps of your pedals got rounded away, and the car stayed where it was with your foot down. The rounded part is now kept.
 
-The game runs at up to 120 frames per second, or your display's refresh rate if that is lower. Some other things in the game still count in whole steps per frame and stop working above about 128.
+The game runs at up to 240 frames per second, or your display's refresh rate if that is lower.
 
 Collisions can still throw a car, as they always could.
 
 ## The countdown before a race (v1.4.1)
 
 From v1.1.0 to v1.4.0 the 3, 2, 1 and START before a race were gone. This patch kept a value in a place it took for unused, and the game clears that place when a race loads, so the digits got a size calculated by dividing by zero. The value now sits in memory the game doesn't use.
+
+## Cars that get hung up (v1.5.0)
+
+The body of a car can land on an edge, like the side of one of the wooden jump ramps or a raised part at the end of a bridge. The car then stays there with its wheels spinning in the air, so it looks like it floats, or like its front lifted and it can't drive any further. It doesn't tip off, because the game keeps the center of mass of these cars at the bottom of the body. The game only corrected a car that spins, so a racer could stay up there until the end of the race, and you had to press Enter.
+
+A car that now stands still for 3 seconds with its front or rear wheels off the ground, or tipped over, goes back on the road by itself. This goes for you, the racers and the police, and at any frame rate.
+
+Cars can still get hung up for those 3 seconds. A frontal hit also still lifts a car's nose, for example when you run into a truck, and for the same reason: the hit lands above the center of mass.
+
+## 32-bit display mode (v1.5.0)
+
+The game used to ask Windows for a 16-bit display mode. Windows 8 and newer have no real 16-bit modes and convert every frame on its way to the screen, and that gets slower as the resolution goes up. From Windows Vista on the game now asks for 32 bits. On a laptop with a Radeon 760M and a 165 Hz display that took the race at the display's normal resolution from 51 to 165 frames per second. Textures stay 16-bit, so the picture looks the same, apart from a loading picture with smoother gradients. Windows XP and older keep 16 bits, because the graphics cards of that time may not handle this.
+
+This also means a resolution no longer needs a 16-bit mode to work.
 
 ## No more flickering (v1.3.0)
 
@@ -122,7 +138,7 @@ The "Schaduw" extra car update and its `overlay7.ini` work in either order.
 
 `A2Racer4Fixes.exe` needs Windows 10 or newer, so on older 64-bit Windows use the 32-bit version. On Windows XP that one needs Service Pack 3. Service Pack 2 is untested, and Microsoft documents that programs with a manifest like this one can make an unpatched SP2 restart, so update to SP3 first, or install hotfixes KB921337 and KB943232. It doesn't support game folders with characters outside your system's code page: it gives an error and changes nothing.
 
-The game can only use a resolution your graphics driver offers at 16-bit color. If it stops with "could not set display mode", type a fixed resolution in the patcher that is listed in your display settings.
+The game can only use a resolution your graphics driver offers: at 32-bit color from Windows Vista on, at 16-bit color on Windows XP and older. If it stops with "could not set display mode", type a fixed resolution in the patcher that is listed in your display settings.
 
 The 32-bit Windows version needs a 486 or newer. The 32-bit Linux version needs a processor with MMX but not SSE2, so it also runs on a Pentium III or Athlon XP, and Linux 3.2 or newer.
 
@@ -138,6 +154,8 @@ The original game is built around 4:3 display modes. Forcing another shape makes
 6. **CD check removal:** see [No CD needed](#no-cd-needed-v120).
 7. **Deeper Z-buffer:** see [No more flickering](#no-more-flickering-v130).
 8. **Car physics:** see [Car physics](#car-physics-v140).
+9. **32-bit display mode:** see [32-bit display mode](#32-bit-display-mode-v150).
+10. **Cars that get hung up:** see [Cars that get hung up](#cars-that-get-hung-up-v150).
 
 ## How the HUD moves
 
@@ -180,6 +198,8 @@ To install by hand instead: back up `spel.dat` and `menu.exe`, and follow the st
 - The v1.2.0 transparency fix was checked in-game by the author on a Radeon 760M under Windows 10. The fix and the CD removal also ran through a race start under Wine with software rendering. Both patchers wrote identical files.
 - The v1.4.0 car physics were checked in-game by the author, and measured under Wine with software rendering, from 15 to about 440 frames per second and with a faked 30-day uptime. The numbers are in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#measurements).
 - The v1.4.1 countdown was checked in-game by the author, and under Wine with software rendering at 4:3 and 16:9.
+- The v1.5.0 display mode was checked in-game by the author on a Radeon 760M under Windows 10: 165 FPS at the display's normal resolution, up from 51/52. The display mode and the 240 FPS limit also ran under Wine with software rendering.
+- The v1.5.0 check for cars that get hung up was checked in-game by the author, and tested under Wine with software rendering, at 165 and 51 frames per second, with a bot and with test placements on a jump ramp. The numbers are in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#patch-part-11-cars-that-get-hung-up).
 - Back up your original files before installing.
 - This project does not include original game assets beyond modified configuration/executable patch files.
 - Testing before v1.1.1 was done on Fedora Linux 44, running the game through Wine using DXVK and DgVoodoo in tandem.
