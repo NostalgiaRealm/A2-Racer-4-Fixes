@@ -1,6 +1,6 @@
 # Technical notes: the A2 Racer 4 `spel.dat` patch
 
-This document explains how `spel.dat` is modified so **A2 Racer 4** renders correctly at any resolution. Everything depends only on the chosen width `W` and height `H`. The examples use 2560×1440.
+This document explains how `spel.dat` is modified so **A2 Racer 4** renders correctly at any resolution. Since v1.3.0 the resolution is not in the patched file: added code reads it from the display every time the game starts, and fills in everything that depends on it in memory. No file changes when the display changes. Everything depends only on the width `W` and height `H`. The examples use 2560×1440.
 
 ## Important background
 
@@ -10,9 +10,9 @@ The original game is designed around 4:3 display modes. If another display mode 
 
 The patch:
 
-1. sets the display-mode table to the chosen resolution;
+1. sets the display-mode table to the resolution of the display;
 2. keeps the vertical view of the Direct3D viewport at 4:3 and calculates the horizontal view from the screen shape;
-3. makes the HUD use the 4:3 shape as well, and leaves its horizontal placement to the `overlay*.ini` files, which the patcher moves to the screen edges.
+3. makes the HUD use the 4:3 shape as well, and moves elements attached to a screen edge to that edge while the game reads the `overlay*.ini` files, which stay as they are.
 
 ## What “Hor+” means here
 
@@ -44,78 +44,37 @@ file offset 0x1973D0 -> VA 0x005973D0
 
 | Part | Change |
 |---|---|
-| 1 | Display-mode table set to `W`×`H` |
+| 1 | Display-mode table set to `W`×`H` at startup |
 | 2 | Viewport divides by a stored 4:3 reference width `(H × 4 + 1) / 3` instead of `W` |
-| 3 | Horizontal clip range becomes `±0.75 × W / H` |
+| 3 | Horizontal clip range becomes `±0.75 × W / H`, calculated in the viewport setup |
 | 4 | Texture memory crash fix, not related to the screen shape |
-| 5 | HUD code uses the 4:3 reference width instead of `W`, in three places |
+| 5 | HUD code uses the 4:3 reference width instead of `W`, in three places, and moves elements to the screen edges |
 | 6 | Transparency fix: alpha test instead of relying on the color key, not related to the screen shape |
 | 7 | CD check removal, in `spel.dat` and `menu.exe` |
+| 8 | Deeper Z-buffer against flickering, not related to the screen shape |
 
 ## Patch part 1: display-mode table
 
-The original executable contains repeated display-mode entries such as:
+`WinMain` calls the game's init function at VA `0x004582AA`. That call now goes to `startup` in the added code first, see [All added and changed bytes](#all-added-and-changed-bytes).
+
+`startup` first calls `SetProcessDPIAware`, looked up at runtime because it does not exist before Windows Vista. Without it, Windows display scaling above 100% scales what this process sees, and at 150% on Windows 10 the screen showed only the top left part of the game. It has the same effect as setting "Override high DPI scaling behavior" to "Application" in the file's compatibility settings, so that setting is no longer needed.
+
+`startup` then takes the resolution from:
+
+1. the two values at the end of the added code, if the patcher wrote a fixed resolution there;
+2. otherwise `EnumDisplaySettingsA(NULL, ENUM_CURRENT_SETTINGS)` for the primary display, looked up at runtime because `spel.dat` doesn't import it;
+3. if that fails, `GetSystemMetrics(SM_CXSCREEN / SM_CYSCREEN)`.
+
+`menu.exe` changes the display mode while it runs, but puts it back before it exits, and the launcher only starts `spel.dat` after that.
+
+It then writes `W` and `H` as 32-bit values to the current mode and all 16-bit entries of the game's mode tables, whichever one `RESOLUTION` in `raser.ini` selects:
 
 ```text
-640×480
-800×600
-1024×768
-1280×1024
-1600×1200
+0x005B3798  0x005B37EC  0x005B3800  0x005B3814  0x005B3864  0x005B3878
+0x005B388C  0x005B38A0  0x005B38B4  0x005B3904  0x005B3918  0x005B392C
 ```
 
-For 2560×1440 those entries become:
-
-```text
-2560×1440
-```
-
-The values are stored as little-endian 16-bit integers.
-
-For 2560:
-
-```text
-2560 decimal = 0x0A00
-little endian bytes = 00 0A
-```
-
-For 1440:
-
-```text
-1440 decimal = 0x05A0
-little endian bytes = A0 05
-```
-
-### 2560×1440 display-mode table offsets
-
-These are the file offsets changed in the original `spel.dat` for the 2560×1440 build:
-
-| File offset | VA | Original | Patched |
-|---:|---:|---:|---:|
-| `0x1B3798` | `0x005B3798` | `640` | `2560` |
-| `0x1B379C` | `0x005B379C` | `480` | `1440` |
-| `0x1B37EC` | `0x005B37EC` | `640` | `2560` |
-| `0x1B37F0` | `0x005B37F0` | `480` | `1440` |
-| `0x1B3800` | `0x005B3800` | `800` | `2560` |
-| `0x1B3804` | `0x005B3804` | `600` | `1440` |
-| `0x1B3814` | `0x005B3814` | `1024` | `2560` |
-| `0x1B3818` | `0x005B3818` | `768` | `1440` |
-| `0x1B3864` | `0x005B3864` | `640` | `2560` |
-| `0x1B3868` | `0x005B3868` | `480` | `1440` |
-| `0x1B3878` | `0x005B3878` | `800` | `2560` |
-| `0x1B387C` | `0x005B387C` | `600` | `1440` |
-| `0x1B388C` | `0x005B388C` | `1024` | `2560` |
-| `0x1B3890` | `0x005B3890` | `768` | `1440` |
-| `0x1B38A0` | `0x005B38A0` | `1280` | `2560` |
-| `0x1B38A4` | `0x005B38A4` | `1024` | `1440` |
-| `0x1B38B4` | `0x005B38B4` | `1600` | `2560` |
-| `0x1B38B8` | `0x005B38B8` | `1200` | `1440` |
-| `0x1B3904` | `0x005B3904` | `640` | `2560` |
-| `0x1B3908` | `0x005B3908` | `480` | `1440` |
-| `0x1B3918` | `0x005B3918` | `800` | `2560` |
-| `0x1B391C` | `0x005B391C` | `600` | `1440` |
-| `0x1B392C` | `0x005B392C` | `1024` | `2560` |
-| `0x1B3930` | `0x005B3930` | `768` | `1440` |
+Each holds the width, followed by the height. All of this is in memory, in `.data`.
 
 ## Patch part 2: 4:3 aspect denominator
 
@@ -140,30 +99,7 @@ For the correct Hor+ result, the calculation is redirected to use a 4:3 referenc
 1440 / 1920 = 0.75
 ```
 
-So the patch stores `1920` at an unused/safe data location and changes the `fidiv` operand to point to that value.
-
-### Aspect denominator storage
-
-The 2560×1440 patch writes the value `1920` here:
-
-```text
-file offset: 0x1973D0
-VA:          0x005973D0
-value:       1920
-bytes:       80 07 00 00
-```
-
-The important bytes for a 16-bit write are:
-
-```text
-80 07
-```
-
-The full 32-bit value is safer for readability:
-
-```text
-80 07 00 00
-```
+So `startup` stores `(H × 4 + 1) / 3`, `1920` here, at an unused data location, VA `0x005973D0`, and the `fidiv` operand is changed to point to that value.
 
 ### Code redirection
 
@@ -209,12 +145,16 @@ dvClipX     = -0.75 × W / H
 dvClipWidth =  1.5  × W / H
 ```
 
-The values are written as 32-bit floats. At 4:3 this gives the original `-1.0` and `2.0`. At 16:9 it gives `-1.3333` and `2.6667`.
+At 4:3 this gives the original `-1.0` and `2.0`. At 16:9 it gives `-1.3333` and `2.6667`.
 
-| File offset | VA | Original | Patched for 16:9 |
+The first instruction becomes a call to `set_horizontal_view` in the added code, which calculates both values from the current mode at `0x005B3798` and `0x005B379C`. The second becomes `nop`s.
+
+| File offset | VA | Original | Patched |
 |---|---|---|---|
-| `0x0C0E8A` | `0x004C0E8A` | `C7 46 14 00 00 80 BF` | `C7 46 14 AB AA AA BF` |
-| `0x0C0E96` | `0x004C0E96` | `C7 46 1C 00 00 00 40` | `C7 46 1C AB AA 2A 40` |
+| `0x0C0E8A` | `0x004C0E8A` | `C7 46 14 00 00 80 BF` | `E8 84 48 0B 00 90 90` |
+| `0x0C0E96` | `0x004C0E96` | `C7 46 1C 00 00 00 40` | `90 90 90 90 90 90 90` |
+
+v1.2.0 and older wrote the values into these instructions, so a patcher only checks the first three bytes there.
 
 ## Patch part 4: texture memory crash fix
 
@@ -295,7 +235,7 @@ On anything but 4:3 this squashes the HUD vertically. Using the 4:3 reference wi
 | `0x07FE55` | `0x0047FE55` | `DB 05 98 37 5B 00` | `DB 05 D0 73 59 00` |
 | `0x080534` | `0x00480534` | `DB 05 98 37 5B 00` | `DB 05 D0 73 59 00` |
 
-Horizontally, HUD `x` reaches the screen edges where `0.99 / 320 × x - 1 = ±0.75 × W / H`. Compared with 4:3 the edges move by `(0.75 × W / H - 1) × 320 / 0.99`, which is the shift the patcher applies to elements attached to an edge. See [Overlay files](#overlay-files).
+Horizontally, HUD `x` reaches the screen edges where `0.99 / 320 × x - 1 = ±0.75 × W / H`. Compared with 4:3 the edges move by `(0.75 × W / H - 1) × 320 / 0.99`, which is the shift for elements attached to an edge. See [Overlay files](#overlay-files).
 
 ## Patch part 6: transparency fix
 
@@ -307,7 +247,7 @@ The game then calls `SetColorKey` with key 0 and enables `D3DRENDERSTATE_COLORKE
 
 ### The fix
 
-The code is in [`A2Racer4Fixes_source/alpha_key_patch.asm`](A2Racer4Fixes_source/alpha_key_patch.asm), in unused space at the end of `.text` (file offset `0x175500`, VA `0x00575500`). The section's virtual size is raised so that space is certainly mapped.
+The code is in [`A2Racer4Fixes_source/spel_patch.asm`](A2Racer4Fixes_source/spel_patch.asm), see [All added and changed bytes](#all-added-and-changed-bytes).
 
 1. **Format:** the game selects the alpha format with the most alpha bits, which it never uses. The selection now prefers the fewest, normally A1R5G5B5. At init the game asks for `16BPP_RGB`; if a 16-bit alpha format exists, the patch asks for `16BPP_ALPHA` instead, sets `ALPHATESTENABLE = 1`, `ALPHAFUNC = GREATER`, `ALPHAREF = 0` and turns `COLORKEYENABLE` off. Without such a format everything behaves as before.
 2. **Texels:** both color converters end by setting the alpha mask on any result other than 0. Other surfaces have an alpha mask of 0, so they are unaffected.
@@ -327,10 +267,97 @@ Three test builds were run on the Radeon 760M, all with the format, texel and ve
 
 Why this driver behaves this way is unknown. The Clear guard made no visible difference by itself in build A. It stays because no build without it has been tried on this GPU.
 
-Patched bytes outside the new code:
+Known limit: with the color key off, the few texels with the key inside the part of `S_SFX` used for skidmarks are drawn dark, because the alpha test is off for skidmarks.
+
+## Patch part 7: CD check removal
+
+`spel.dat`: `FUN_004CD3B0` looks for the disc on all CD-ROM drives and stops with "A2 Racer CD-ROM niet gevonden" when it finds none. The stop now returns instead. Files are looked up in the game folder first (`FUN_004CD4A0`), so the disc is only used for a file missing from the folder, and a disc that is present still works.
+
+| File | File offset | VA | Original | Patched |
+|---|---|---|---|---|
+| `spel.dat` | `0x0CD478` | `0x004CD478` | `68 70` | `EB B6` |
+| `menu.exe` | `0x0A5154` | `0x004A5D54` | `E8 7F FE FF FF 84 C0 74 08` | `90 90 90 90 90 90 90 90 90` |
+
+`menu.exe`: `FUN_004A5D4C` searches drives C to Z for `DATA\INTRO1.MPG` and shows its "CD not found" dialog when that fails. The patch skips the search and takes the "found" result. The intro itself plays from the game folder first (`FUN_004A50D0`).
+
+The optional `[CDCHECK]` section the game can read from `game.ini` is not in the shipped file and is left alone. Without it the game does not check.
+
+## Patch part 8: deeper Z-buffer
+
+Where surfaces lie close together, the game flickers. `FUN_004C0610` creates the Z-buffer with the depth its caller passes, always 16 bits, and the view runs from 10 to 12500 (`FUN_004B39D0`). Depth precision falls with distance as roughly `z² / (near × 2^bits)`, so at 16 bits two surfaces about 1.5 units apart at distance 1000 can already swap places from frame to frame. Forcing a 24-bit or 32-bit Z-buffer with dgVoodoo removes the flickering.
+
+The call to `IDirectDraw::CreateSurface` at VA `0x004C0679` now goes to `create_zbuffer` in the added code, which tries 24 bits, then 32, then the original 16. The game never reads the Z-buffer itself, so nothing else depends on its depth.
+
+This only happens from Windows Vista on (`GetVersion` major version 6 or higher). Cards from the Windows 9x and XP period could accept a Z-buffer of another depth than a 16-bit screen when it is created and only fail when drawing, so those systems keep 16 bits and keep the flickering.
+
+Known limit: if a driver accepts the deeper Z-buffer but then refuses the Direct3D device, the game stops with its device error. There is no retry at 16 bits.
+
+## All added and changed bytes
+
+The added code is built from [`A2Racer4Fixes_source/spel_patch.asm`](A2Racer4Fixes_source/spel_patch.asm). It goes in unused space at the end of `.text`, file offset `0x175500`, VA `0x00575500`, and the section's virtual size is raised so that space is certainly mapped. That space must be all zero before patching. A `spel.dat` from v1.2.0 has older code there, so the patcher starts from the copy in `4x3_backup` in that case.
+
+1168 bytes at `0x175500`:
+
+```text
+83 7C 24 04 03 75 60 A1 26 B8 73 00 83 F8 FF 74 56 69 C0 B0 00 00 00 03
+05 D8 B7 73 00 83 78 54 10 75 44 C7 44 24 04 04 00 00 00 6A 00 6A 18 A1
+B4 B4 73 00 50 8B 08 FF 51 5C 6A 05 6A 19 A1 B4 B4 73 00 50 8B 08 FF 51
+5C 6A 01 6A 0F A1 B4 B4 73 00 50 8B 08 FF 51 5C 6A 00 6A 29 A1 B4 B4 73
+00 50 8B 08 FF 51 5C B8 90 2B 4C 00 FF E0 01 F0 5E 5B EB 04 5B 01 F0 5E
+85 C0 74 06 0B 05 A8 09 74 00 C3 BA 01 00 00 00 EB 0C 8B 54 24 0C 85 D2
+0F 94 C2 0F B6 D2 52 FF 74 24 10 6A 1B FF 74 24 10 8B 04 24 8B 08 FF 51
+5C 5A 50 A1 2E B8 73 00 3B 05 26 B8 73 00 75 35 52 6A 0F FF 74 24 10 8B
+04 24 8B 08 FF 51 5C 83 3D 05 B5 73 00 02 75 1D 8B 44 24 10 F7 D8 19 C0
+83 E0 02 83 C0 02 50 6A 15 FF 74 24 10 8B 04 24 8B 08 FF 51 5C 58 C2 0C
+00 A1 2E B8 73 00 3B 05 26 B8 73 00 75 4A 50 54 6A 0F A1 B4 B4 73 00 50
+8B 08 FF 51 58 6A 00 6A 0F A1 B4 B4 73 00 50 8B 08 FF 51 5C FF 74 24 14
+FF 74 24 14 FF 74 24 14 FF 74 24 14 8B 04 24 8B 08 FF 51 30 5A 50 52 6A
+0F A1 B4 B4 73 00 50 8B 08 FF 51 5C 58 C2 10 00 8B 44 24 04 8B 08 FF 61
+30 60 68 C5 58 57 00 FF 15 A0 60 57 00 89 C6 85 F6 74 12 68 E5 58 57 00
+56 FF 15 FC 60 57 00 85 C0 74 02 FF D0 8B 1D 90 59 57 00 8B 2D 94 59 57
+00 85 DB 75 61 81 EC 9C 00 00 00 89 E7 B9 27 00 00 00 31 C0 F3 AB 66 C7
+44 24 24 9C 00 85 F6 74 2B 68 D0 58 57 00 56 FF 15 FC 60 57 00 85 C0 74
+1B 54 6A FF 6A 00 FF D0 85 C0 74 10 8B 5C 24 6C 8B 6C 24 70 85 DB 74 04
+85 ED 75 14 6A 00 FF 15 F4 61 57 00 89 C3 6A 01 FF 15 F4 61 57 00 89 C5
+81 C4 9C 00 00 00 BE 60 59 57 00 B9 0C 00 00 00 AD 89 18 89 68 04 E2 F8
+8D 04 AD 01 00 00 00 31 D2 B9 03 00 00 00 F7 F1 A3 D0 73 59 00 61 E9 CD
+29 EE FF 50 A1 98 37 5B 00 8D 04 40 50 DB 04 24 A1 9C 37 5B 00 C1 E0 02
+89 04 24 DA 34 24 58 D9 C0 D9 E0 D9 5E 14 DC C0 D9 5E 1C 58 C3 FF 74 24
+0C FF 74 24 0C FF 74 24 0C E8 22 B8 F0 FF 84 C0 74 2D 50 8B 44 24 08 8B
+40 04 85 C0 74 20 E8 4F 00 00 00 85 C0 74 17 50 E8 15 00 00 00 59 0F AF
+C1 50 DB 04 24 58 8B 4C 24 10 D8 01 D9 19 58 C2 0C 00 A1 98 37 5B 00 8D
+04 40 8B 0D 9C 37 5B 00 8D 14 8D 00 00 00 00 29 D0 69 C0 40 1F 00 00 6B
+C9 63 89 CA D1 EA 85 C0 79 02 F7 DA 01 D0 99 F7 F9 C3 56 57 89 C6 83 EC
+40 89 E2 6A 40 52 68 34 A0 5A 00 56 E8 47 E5 F4 FF 83 C4 10 89 E0 BF F8
+58 57 00 E8 6A 00 00 00 74 58 89 F0 BF 11 59 57 00 E8 5C 00 00 00 74 4A
+89 F0 BF 28 59 57 00 E8 4E 00 00 00 74 3C 89 F0 BF 37 59 57 00 E8 40 00
+00 00 74 2E 89 E0 BF 04 59 57 00 E8 32 00 00 00 74 27 89 F0 BF 46 59 57
+00 E8 2F 00 00 00 74 19 89 F0 BF 55 59 57 00 E8 21 00 00 00 74 0B 31 C0
+EB 0A B8 01 00 00 00 EB 03 83 C8 FF 83 C4 40 5F 5E C3 E8 06 00 00 00 75
+03 80 38 00 C3 57 8A 0F 84 C9 74 17 8A 28 80 FD 61 72 08 80 FD 7A 77 03
+80 ED 20 38 CD 75 04 40 47 EB E3 5F C3 56 8B 74 24 0C FF 15 AC 60 57 00
+3C 06 72 27 C7 46 18 18 00 00 00 E8 24 00 00 00 85 C0 74 1C C7 46 18 20
+00 00 00 E8 14 00 00 00 85 C0 74 0C C7 46 18 10 00 00 00 E8 04 00 00 00
+5E C2 10 00 FF 74 24 18 FF 74 24 18 FF 74 24 18 FF 74 24 18 8B 04 24 8B
+08 FF 51 18 C3 55 53 45 52 33 32 2E 44 4C 4C 00 45 6E 75 6D 44 69 73 70
+6C 61 79 53 65 74 74 69 6E 67 73 41 00 53 65 74 50 72 6F 63 65 73 73 44
+50 49 41 77 61 72 65 00 53 50 45 45 44 4F 4D 45 54 45 52 00 43 4F 4D 4D
+55 4E 49 43 41 54 4F 52 00 53 54 52 49 4E 47 5F 52 41 43 45 5F 54 49 4D
+45 5F 56 41 4C 55 45 00 53 54 52 49 4E 47 5F 43 55 52 5F 4C 41 50 00 53
+54 52 49 4E 47 5F 43 55 52 5F 50 4F 53 00 4F 56 4C 5F 50 4F 52 54 52 41
+49 54 53 5F 00 50 4C 41 59 45 52 5F 00 90 90 90 98 37 5B 00 EC 37 5B 00
+00 38 5B 00 14 38 5B 00 64 38 5B 00 78 38 5B 00 8C 38 5B 00 A0 38 5B 00
+B4 38 5B 00 04 39 5B 00 18 39 5B 00 2C 39 5B 00
+```
+
+After it, at `0x175990`, come two 32-bit values: a fixed width and height, or `0` and `0` to follow the display.
 
 | File offset | Original | Patched | What |
 |---|---|---|---|
+| `0x0582AA` | `E8 31 FE FF FF` | `E8 A2 D3 11 00` | startup call |
+| `0x07FDCF` | `E8 9C 11 00 00` | `E8 69 59 0F 00` | HUD position read |
+| `0x07FF43` | `E8 28 10 00 00` | `E8 F5 57 0F 00` | HUD position read |
+| `0x080610` | `E8 5B 09 00 00` | `E8 28 51 0F 00` | HUD position read |
 | `0x0C287D` | `8E` | `8D` | alpha format choice |
 | `0x0C058A` | `E8 01 26 00 00` | `E8 71 4F 0B 00` | texture format choice |
 | `0x0C7FF9` | `03 C6 5E 5B C3` | `E9 70 D5 0A 00` | 24-bit color conversion |
@@ -354,42 +381,9 @@ Patched bytes outside the new code:
 | `0x0B5E4D` | `8B 08 50 FF 51 5C` | `50 E8 37 F7 0B 00` | alpha blend switch |
 | `0x0B5E6C` | `8B 10 50 FF 52 5C` | `50 E8 11 F7 0B 00` | alpha blend switch |
 | `0x0C0F80` | `8B 11 50 6A 01 51 FF 52 30` | `50 6A 01 51 E8 68 46 0B 00` | viewport clear |
+| `0x0C0679` | `8B 08 52 50 FF 51 18` | `52 50 E8 ED 51 0B 00` | Z-buffer creation |
 | `0x0001F8` | `4A 44 17 00` | `00 50 17 00` | code section size |
-
-New code at `0x175500`, which must be all zero before patching:
-
-```text
-83 7C 24 04 03 75 60 A1 26 B8 73 00 83 F8 FF 74 56 69 C0 B0 00 00 00 03
-05 D8 B7 73 00 83 78 54 10 75 44 C7 44 24 04 04 00 00 00 6A 00 6A 18 A1
-B4 B4 73 00 50 8B 08 FF 51 5C 6A 05 6A 19 A1 B4 B4 73 00 50 8B 08 FF 51
-5C 6A 01 6A 0F A1 B4 B4 73 00 50 8B 08 FF 51 5C 6A 00 6A 29 A1 B4 B4 73
-00 50 8B 08 FF 51 5C B8 90 2B 4C 00 FF E0 01 F0 5E 5B EB 04 5B 01 F0 5E
-85 C0 74 06 0B 05 A8 09 74 00 C3 BA 01 00 00 00 EB 0C 8B 54 24 0C 85 D2
-0F 94 C2 0F B6 D2 52 FF 74 24 10 6A 1B FF 74 24 10 8B 04 24 8B 08 FF 51
-5C 5A 50 A1 2E B8 73 00 3B 05 26 B8 73 00 75 35 52 6A 0F FF 74 24 10 8B
-04 24 8B 08 FF 51 5C 83 3D 05 B5 73 00 02 75 1D 8B 44 24 10 F7 D8 19 C0
-83 E0 02 83 C0 02 50 6A 15 FF 74 24 10 8B 04 24 8B 08 FF 51 5C 58 C2 0C
-00 A1 2E B8 73 00 3B 05 26 B8 73 00 75 4A 50 54 6A 0F A1 B4 B4 73 00 50
-8B 08 FF 51 58 6A 00 6A 0F A1 B4 B4 73 00 50 8B 08 FF 51 5C FF 74 24 14
-FF 74 24 14 FF 74 24 14 FF 74 24 14 8B 04 24 8B 08 FF 51 30 5A 50 52 6A
-0F A1 B4 B4 73 00 50 8B 08 FF 51 5C 58 C2 10 00 8B 44 24 04 8B 08 FF 61
-30
-```
-
-Known limit: with the color key off, the few texels with the key inside the part of `S_SFX` used for skidmarks are drawn dark, because the alpha test is off for skidmarks.
-
-## Patch part 7: CD check removal
-
-`spel.dat`: `FUN_004CD3B0` looks for the disc on all CD-ROM drives and stops with "A2 Racer CD-ROM niet gevonden" when it finds none. The stop now returns instead. Files are looked up in the game folder first (`FUN_004CD4A0`), so the disc is only used for a file missing from the folder, and a disc that is present still works.
-
-| File | File offset | VA | Original | Patched |
-|---|---|---|---|---|
-| `spel.dat` | `0x0CD478` | `0x004CD478` | `68 70` | `EB B6` |
-| `menu.exe` | `0x0A5154` | `0x004A5D54` | `E8 7F FE FF FF 84 C0 74 08` | `90 90 90 90 90 90 90 90 90` |
-
-`menu.exe`: `FUN_004A5D4C` searches drives C to Z for `DATA\INTRO1.MPG` and shows its "CD not found" dialog when that fails. The patch skips the search and takes the "found" result. The intro itself plays from the game folder first (`FUN_004A50D0`).
-
-The optional `[CDCHECK]` section the game can read from `game.ini` is not in the shipped file and is left alone. Without it the game does not check.
+| `0x0CD478` | `68 70` | `EB B6` | CD check |
 
 ## Manual patching on Windows
 
@@ -434,23 +428,19 @@ PE
 
 This confirms that the `.dat` file is really a Windows executable.
 
-### Step 3: patch the display-mode table
+### Step 3: add the code
 
-In HxD or 010 Editor, go to each display-mode table file offset listed above and overwrite the 16-bit little-endian values with your width and height. For 2560×1440 that is `00 0A` and `A0 05`.
+Write the code and the two zero values from [All added and changed bytes](#all-added-and-changed-bytes) at file offset `0x175500`, and apply every row of the table there. This covers the startup code, the transparency fix and the CD check in `spel.dat`.
 
-### Step 4: create the 4:3 reference denominator
+### Step 4: redirect the aspect division and the HUD
 
-At file offset `0x1973D0`, write `(H × 4 + 1) / 3`, rounded down, as a 32-bit little-endian value. For a height of 1440 that is `1920`: `80 07 00 00`.
+Apply the changes from [Patch part 2](#patch-part-2-43-aspect-denominator) and [Patch part 5](#patch-part-5-hud-proportions).
 
-### Step 5: redirect the aspect division and the HUD
+### Step 5: set up the horizontal view
 
-Make the changes from [Patch part 2](#patch-part-2-43-aspect-denominator) and [Patch part 5](#patch-part-5-hud-proportions).
+Apply the changes from [Patch part 3](#patch-part-3-horizontal-clip-range).
 
-### Step 6: set the horizontal clip range
-
-At file offsets `0x0C0E8D` and `0x0C0E99`, write `-0.75 × W / H` and `1.5 × W / H` as 32-bit little-endian floats. A value for 16:9 is in [Patch part 3](#patch-part-3-horizontal-clip-range).
-
-### Step 7: fix the texture memory crash
+### Step 6: fix the texture memory crash
 
 At file offset:
 
@@ -472,15 +462,7 @@ C7 81 A1 02 00 00 00 00 00 04 C3
 
 This step also works on its own, for example on an original 4:3 `spel.dat`.
 
-### Step 8: apply the transparency fix
-
-Write the new code and the patched bytes from [Patch part 6](#patch-part-6-transparency-fix).
-
-### Step 9: remove the CD check
-
-Apply both changes from [Patch part 7](#patch-part-7-cd-check-removal). The second one is in `menu.exe`, so back that file up first.
-
-### Step 10: save as `spel.dat`
+### Step 7: save as `spel.dat`
 
 Save the patched file and rename it to:
 
@@ -490,9 +472,13 @@ spel.dat
 
 Then place it in the game directory.
 
-### Step 11: install the overlay `.ini` files
+### Step 8: remove the CD check from `menu.exe`
 
-See [Overlay files](#overlay-files), or use `A2Racer4_DashboardFix.zip` on a 16:9 screen.
+Back up `menu.exe` and apply its row from [Patch part 7](#patch-part-7-cd-check-removal).
+
+### Step 9: check the overlay `.ini` files
+
+They must be the game's own files. A file an older version of this fix changed is moved a second time. Restore it from `4x3_backup` or the game CD.
 
 ## Manual patching on Linux
 
@@ -549,117 +535,26 @@ After patching, this should become:
 
 ### Step 3: patch with Python
 
-This Python script applies the patch to an input `spel.dat`.
-
-Save as:
-
-```text
-patch_spel_16x9.py
-```
+Save this as `patch_spel.py`:
 
 ```python
+#!/usr/bin/env python3
 from pathlib import Path
 import struct
 import sys
 
-if len(sys.argv) != 4:
-    print("Usage: python3 patch_spel_16x9.py <input_spel.dat> <output_spel.dat> <width>x<height>")
-    raise SystemExit(1)
-
 input_path = Path(sys.argv[1])
 output_path = Path(sys.argv[2])
-resolution = sys.argv[3].lower()
-
-width_text, height_text = resolution.split("x")
-width = int(width_text)
-height = int(height_text)
+fixed = sys.argv[3].lower().split("x") if len(sys.argv) > 3 else ["0", "0"]
+width, height = int(fixed[0]), int(fixed[1])
 
 data = bytearray(input_path.read_bytes())
 
-# The game stores these mode values as 16-bit little-endian integers.
-if not (0 <= width <= 65535 and 0 <= height <= 65535):
-    raise ValueError("Width and height must fit in an unsigned 16-bit value.")
+if data[:2] != b"MZ":
+    raise RuntimeError("Not a PE executable")
 
-# For Hor+, keep a 4:3 reference width for the chosen height.
-aspect_denominator = round(height * 4 / 3)
-
-if not (0 <= aspect_denominator <= 65535):
-    raise ValueError("Aspect denominator must fit in an unsigned 16-bit value.")
-
-# Display-mode table entries seen in the tested executable.
-width_offsets = [
-    0x1B3798,
-    0x1B37EC,
-    0x1B3800,
-    0x1B3814,
-    0x1B3864,
-    0x1B3878,
-    0x1B388C,
-    0x1B38A0,
-    0x1B38B4,
-    0x1B3904,
-    0x1B3918,
-    0x1B392C,
-]
-
-height_offsets = [
-    0x1B379C,
-    0x1B37F0,
-    0x1B3804,
-    0x1B3818,
-    0x1B3868,
-    0x1B387C,
-    0x1B3890,
-    0x1B38A4,
-    0x1B38B8,
-    0x1B3908,
-    0x1B391C,
-    0x1B3930,
-]
-
-for offset in width_offsets:
-    data[offset:offset + 2] = struct.pack("<H", width)
-
-for offset in height_offsets:
-    data[offset:offset + 2] = struct.pack("<H", height)
-
-# Store the 4:3 reference denominator.
-# For a height of 1440 this is 1920.
-data[0x1973D0:0x1973D0 + 4] = struct.pack("<I", aspect_denominator)
-
-def patch(offset, old, new, label):
-    old = bytes.fromhex(old)
-    new = bytes.fromhex(new)
-    if data[offset:offset + len(old)] != old and data[offset:offset + len(new)] != new:
-        raise RuntimeError(f"Unexpected bytes at {label}. Wrong executable version?")
-    data[offset:offset + len(new)] = new
-
-# Use the 4:3 reference width for the viewport and the HUD.
-patch(0x0C0E57, "DA 35 98 37 5B 00", "DA 35 D0 73 59 00", "aspect division")
-patch(0x07CDD1, "DA 35 98 37 5B 00", "DA 35 D0 73 59 00", "HUD scale")
-patch(0x07FE55, "DB 05 98 37 5B 00", "DB 05 D0 73 59 00", "HUD position")
-patch(0x080534, "DB 05 98 37 5B 00", "DB 05 D0 73 59 00", "HUD position")
-
-# Horizontal clip range for this screen shape.
-if data[0x0C0E8A:0x0C0E8D] != bytes.fromhex("C7 46 14") or data[0x0C0E96:0x0C0E99] != bytes.fromhex("C7 46 1C"):
-    raise RuntimeError("Unexpected bytes at the clip range. Wrong executable version?")
-data[0x0C0E8D:0x0C0E91] = struct.pack("<f", -0.75 * width / height)
-data[0x0C0E99:0x0C0E9D] = struct.pack("<f", 1.5 * width / height)
-
-# Texture memory crash fix: skip the probe and report 64 MB.
-# mov eax, 0x1000 / call 0x00559400 / push ebx
-# -> mov dword ptr [ecx+0x2A1], 0x04000000 / ret
-old = bytes.fromhex("B8 00 10 00 00 E8 06 D3 09 00 53")
-new = bytes.fromhex("C7 81 A1 02 00 00 00 00 00 04 C3")
-offset = 0x0BC0F0
-
-if data[offset:offset + len(old)] != old and data[offset:offset + len(new)] != new:
-    raise RuntimeError("Unexpected bytes at texture memory probe. Wrong executable version?")
-
-data[offset:offset + len(new)] = new
-
-# Transparency fix and spel.dat CD check, see parts 6 and 7.
-ALPHA_KEY_CODE = bytes.fromhex("""
+CODE_OFFSET = 0x175500
+CODE = bytes.fromhex("""
 83 7C 24 04 03 75 60 A1 26 B8 73 00 83 F8 FF 74 56 69 C0 B0 00 00 00 03
 05 D8 B7 73 00 83 78 54 10 75 44 C7 44 24 04 04 00 00 00 6A 00 6A 18 A1
 B4 B4 73 00 50 8B 08 FF 51 5C 6A 05 6A 19 A1 B4 B4 73 00 50 8B 08 FF 51
@@ -674,13 +569,53 @@ B4 B4 73 00 50 8B 08 FF 51 5C 6A 05 6A 19 A1 B4 B4 73 00 50 8B 08 FF 51
 8B 08 FF 51 58 6A 00 6A 0F A1 B4 B4 73 00 50 8B 08 FF 51 5C FF 74 24 14
 FF 74 24 14 FF 74 24 14 FF 74 24 14 8B 04 24 8B 08 FF 51 30 5A 50 52 6A
 0F A1 B4 B4 73 00 50 8B 08 FF 51 5C 58 C2 10 00 8B 44 24 04 8B 08 FF 61
-30
+30 60 68 C5 58 57 00 FF 15 A0 60 57 00 89 C6 85 F6 74 12 68 E5 58 57 00
+56 FF 15 FC 60 57 00 85 C0 74 02 FF D0 8B 1D 90 59 57 00 8B 2D 94 59 57
+00 85 DB 75 61 81 EC 9C 00 00 00 89 E7 B9 27 00 00 00 31 C0 F3 AB 66 C7
+44 24 24 9C 00 85 F6 74 2B 68 D0 58 57 00 56 FF 15 FC 60 57 00 85 C0 74
+1B 54 6A FF 6A 00 FF D0 85 C0 74 10 8B 5C 24 6C 8B 6C 24 70 85 DB 74 04
+85 ED 75 14 6A 00 FF 15 F4 61 57 00 89 C3 6A 01 FF 15 F4 61 57 00 89 C5
+81 C4 9C 00 00 00 BE 60 59 57 00 B9 0C 00 00 00 AD 89 18 89 68 04 E2 F8
+8D 04 AD 01 00 00 00 31 D2 B9 03 00 00 00 F7 F1 A3 D0 73 59 00 61 E9 CD
+29 EE FF 50 A1 98 37 5B 00 8D 04 40 50 DB 04 24 A1 9C 37 5B 00 C1 E0 02
+89 04 24 DA 34 24 58 D9 C0 D9 E0 D9 5E 14 DC C0 D9 5E 1C 58 C3 FF 74 24
+0C FF 74 24 0C FF 74 24 0C E8 22 B8 F0 FF 84 C0 74 2D 50 8B 44 24 08 8B
+40 04 85 C0 74 20 E8 4F 00 00 00 85 C0 74 17 50 E8 15 00 00 00 59 0F AF
+C1 50 DB 04 24 58 8B 4C 24 10 D8 01 D9 19 58 C2 0C 00 A1 98 37 5B 00 8D
+04 40 8B 0D 9C 37 5B 00 8D 14 8D 00 00 00 00 29 D0 69 C0 40 1F 00 00 6B
+C9 63 89 CA D1 EA 85 C0 79 02 F7 DA 01 D0 99 F7 F9 C3 56 57 89 C6 83 EC
+40 89 E2 6A 40 52 68 34 A0 5A 00 56 E8 47 E5 F4 FF 83 C4 10 89 E0 BF F8
+58 57 00 E8 6A 00 00 00 74 58 89 F0 BF 11 59 57 00 E8 5C 00 00 00 74 4A
+89 F0 BF 28 59 57 00 E8 4E 00 00 00 74 3C 89 F0 BF 37 59 57 00 E8 40 00
+00 00 74 2E 89 E0 BF 04 59 57 00 E8 32 00 00 00 74 27 89 F0 BF 46 59 57
+00 E8 2F 00 00 00 74 19 89 F0 BF 55 59 57 00 E8 21 00 00 00 74 0B 31 C0
+EB 0A B8 01 00 00 00 EB 03 83 C8 FF 83 C4 40 5F 5E C3 E8 06 00 00 00 75
+03 80 38 00 C3 57 8A 0F 84 C9 74 17 8A 28 80 FD 61 72 08 80 FD 7A 77 03
+80 ED 20 38 CD 75 04 40 47 EB E3 5F C3 56 8B 74 24 0C FF 15 AC 60 57 00
+3C 06 72 27 C7 46 18 18 00 00 00 E8 24 00 00 00 85 C0 74 1C C7 46 18 20
+00 00 00 E8 14 00 00 00 85 C0 74 0C C7 46 18 10 00 00 00 E8 04 00 00 00
+5E C2 10 00 FF 74 24 18 FF 74 24 18 FF 74 24 18 FF 74 24 18 8B 04 24 8B
+08 FF 51 18 C3 55 53 45 52 33 32 2E 44 4C 4C 00 45 6E 75 6D 44 69 73 70
+6C 61 79 53 65 74 74 69 6E 67 73 41 00 53 65 74 50 72 6F 63 65 73 73 44
+50 49 41 77 61 72 65 00 53 50 45 45 44 4F 4D 45 54 45 52 00 43 4F 4D 4D
+55 4E 49 43 41 54 4F 52 00 53 54 52 49 4E 47 5F 52 41 43 45 5F 54 49 4D
+45 5F 56 41 4C 55 45 00 53 54 52 49 4E 47 5F 43 55 52 5F 4C 41 50 00 53
+54 52 49 4E 47 5F 43 55 52 5F 50 4F 53 00 4F 56 4C 5F 50 4F 52 54 52 41
+49 54 53 5F 00 50 4C 41 59 45 52 5F 00 90 90 90 98 37 5B 00 EC 37 5B 00
+00 38 5B 00 14 38 5B 00 64 38 5B 00 78 38 5B 00 8C 38 5B 00 A0 38 5B 00
+B4 38 5B 00 04 39 5B 00 18 39 5B 00 2C 39 5B 00
 """)
-if data[0x175500:0x175500 + len(ALPHA_KEY_CODE)] not in (bytes(len(ALPHA_KEY_CODE)), ALPHA_KEY_CODE):
-    raise RuntimeError("Unexpected bytes at the transparency code. Wrong executable version?")
-data[0x175500:0x175500 + len(ALPHA_KEY_CODE)] = ALPHA_KEY_CODE
+if data[CODE_OFFSET:CODE_OFFSET + len(CODE)] not in (bytes(len(CODE)), CODE):
+    raise RuntimeError("Unexpected bytes where the code goes. Wrong executable version?")
+data[CODE_OFFSET:CODE_OFFSET + len(CODE)] = CODE
+# A fixed resolution, or 0 and 0 to follow the display.
+data[CODE_OFFSET + len(CODE):CODE_OFFSET + len(CODE) + 8] = struct.pack("<II", width, height)
 
 for offset, old, new in [
+    (0x0582AA, "E8 31 FE FF FF", "E8 A2 D3 11 00"),
+    (0x07FDCF, "E8 9C 11 00 00", "E8 69 59 0F 00"),
+    (0x07FF43, "E8 28 10 00 00", "E8 F5 57 0F 00"),
+    (0x080610, "E8 5B 09 00 00", "E8 28 51 0F 00"),
     (0x0C287D, "8E", "8D"),
     (0x0C058A, "E8 01 26 00 00", "E8 71 4F 0B 00"),
     (0x0C7FF9, "03 C6 5E 5B C3", "E9 70 D5 0A 00"),
@@ -704,93 +639,68 @@ for offset, old, new in [
     (0x0B5E4D, "8B 08 50 FF 51 5C", "50 E8 37 F7 0B 00"),
     (0x0B5E6C, "8B 10 50 FF 52 5C", "50 E8 11 F7 0B 00"),
     (0x0C0F80, "8B 11 50 6A 01 51 FF 52 30", "50 6A 01 51 E8 68 46 0B 00"),
+    (0x0C0679, "8B 08 52 50 FF 51 18", "52 50 E8 ED 51 0B 00"),
     (0x0001F8, "4A 44 17 00", "00 50 17 00"),
     (0x0CD478, "68 70", "EB B6"),
+    # Use the 4:3 reference width for the viewport and the HUD.
+    (0x0C0E57, "DA 35 98 37 5B 00", "DA 35 D0 73 59 00"),
+    (0x07CDD1, "DA 35 98 37 5B 00", "DA 35 D0 73 59 00"),
+    (0x07FE55, "DB 05 98 37 5B 00", "DB 05 D0 73 59 00"),
+    (0x080534, "DB 05 98 37 5B 00", "DB 05 D0 73 59 00"),
+    # Texture memory crash fix: skip the probe and report 64 MB.
+    (0x0BC0F0, "B8 00 10 00 00 E8 06 D3 09 00 53", "C7 81 A1 02 00 00 00 00 00 04 C3"),
 ]:
     old, new = bytes.fromhex(old), bytes.fromhex(new)
     if data[offset:offset + len(old)] != old and data[offset:offset + len(new)] != new:
         raise RuntimeError(f"Unexpected bytes at 0x{offset:X}. Wrong executable version?")
     data[offset:offset + len(new)] = new
 
-output_path.write_bytes(data)
+# The horizontal view comes from the added code. v1.2.0 and older changed the
+# values in these instructions, so only their first bytes are checked.
+for offset, opcode, new in [
+    (0x0C0E8A, "C7 46 14", "E8 84 48 0B 00 90 90"),
+    (0x0C0E96, "C7 46 1C", "90 90 90 90 90 90 90"),
+]:
+    new = bytes.fromhex(new)
+    if data[offset:offset + 3] != bytes.fromhex(opcode) and data[offset:offset + len(new)] != new:
+        raise RuntimeError(f"Unexpected bytes at 0x{offset:X}. Wrong executable version?")
+    data[offset:offset + len(new)] = new
 
+output_path.write_bytes(data)
 print(f"Patched {input_path} -> {output_path}")
-print(f"Resolution: {width}x{height}")
-print(f"4:3 reference denominator: {aspect_denominator}")
 ```
 
-Run it like this:
+Run it like this. Add a resolution such as `2560x1440` at the end to fix it instead of following the display:
 
 ```bash
-python3 patch_spel_16x9.py spel.dat spel_2560x1440.dat 2560x1440
+python3 patch_spel.py spel.dat spel_patched.dat
 ```
 
 Then install:
 
 ```bash
-cp spel_2560x1440.dat /path/to/A2Racer4/spel.dat
+cp spel_patched.dat /path/to/A2Racer4/spel.dat
 ```
 
 ### Step 4: verify the patch
 
-Use `objdump` again:
-
 ```bash
-objdump -D -Mintel \
-  --start-address=0x4c0e30 \
-  --stop-address=0x4c0eb0 \
-  spel_2560x1440.dat
+objdump -D -Mintel --start-address=0x4c0e50 --stop-address=0x4c0ea0 spel_patched.dat
 ```
 
-Check that the `fidiv` line points to `0x5973d0` and the clip constants match your screen shape.
+Check that the `fidiv` line points to `0x5973d0`, that a `call` sits at `0x4c0e8a`, and that `0x4c0e96` holds `nop`s.
 
 Check the crash fix as well:
 
 ```bash
-objdump -D -Mintel \
-  --start-address=0x4bc0f0 \
-  --stop-address=0x4bc0fb \
-  spel_2560x1440.dat
+objdump -D -Mintel --start-address=0x4bc0f0 --stop-address=0x4bc0fb spel_patched.dat
 ```
 
-It should show:
-
-```asm
-4bc0f0:  c7 81 a1 02 00 00 00   mov    DWORD PTR [ecx+0x2a1],0x4000000
-4bc0f7:  00 00 04
-4bc0fa:  c3                     ret
-```
-
-You can also verify the table values with Python:
-
-```python
-from pathlib import Path
-import struct
-
-data = Path("spel_2560x1440.dat").read_bytes()
-
-for offset in [0x1B3798, 0x1B3800, 0x1B3814]:
-    print(hex(offset), struct.unpack_from("<H", data, offset)[0])
-
-for offset in [0x1B379C, 0x1B3804, 0x1B3818]:
-    print(hex(offset), struct.unpack_from("<H", data, offset)[0])
-
-print("aspect denominator:", struct.unpack_from("<I", data, 0x1973D0)[0])
-```
-
-Expected output for 2560×1440:
-
-```text
-2560
-2560
-2560
-1440
-1440
-1440
-aspect denominator: 1920
-```
+It should store `0x4000000` at `[ecx+0x2a1]` and return.
 
 ## Values for other resolutions
+
+The added code calculates these at startup:
 
 | Resolution | Reference denominator | dvClipX | dvClipWidth | HUD shift |
 |---|---|---:|---:|---:|
@@ -804,7 +714,7 @@ aspect denominator: 1920
 
 ## Overlay files
 
-The HUD uses separate configuration files, `overlay*.ini`, on a 640×480 canvas. Only the `x` of `Position` changes, starting from the game's own files:
+The HUD uses separate configuration files, `overlay*.ini`, on a 640×480 canvas. Since v1.3.0 they stay as the game ships them. The three calls that read a `Position` (`0x0047FDCF`, `0x0047FF43` and `0x00480610`) go through `read_position` in the added code, which changes only the `x` it just read:
 
 ```text
 shift = (0.75 × W / H - 1) × 320 / 0.99, rounded
@@ -828,9 +738,17 @@ That is the game's color key on a current driver. Check the changes in [Patch pa
 
 Check both changes in [Patch part 7](#patch-part-7-cd-check-removal). The menu and the race each have their own check.
 
+### The game stops with "could not set display mode"
+
+The display's current resolution is not available at 16-bit color. Run the patcher again and type a fixed resolution that is.
+
+### Surfaces flicker where they meet
+
+The Z-buffer is still 16 bits. Check that the call at file offset `0x0C0679` goes to `create_zbuffer`. Windows XP and older keep 16 bits on purpose, see [Patch part 8](#patch-part-8-deeper-z-buffer).
+
 ### The game still opens in the old resolution
 
-Check that all relevant mode-table entries were patched. The game has several repeated mode tables, so patching only one `640×480` or `800×600` entry may not be enough.
+Check that the call at file offset `0x0582AA` goes to `startup`, and that the two values after the added code are `0` or the resolution you want.
 
 ### The 3D image is stretched
 
@@ -842,7 +760,7 @@ Check the horizontal clip constants against the formula in [Patch part 3](#patch
 
 ### The HUD is stretched or misplaced
 
-Elements in the wrong place come from the `overlay*.ini` files. A squashed HUD means the three HUD changes in [Patch part 5](#patch-part-5-hud-proportions) are missing.
+Elements too far out or too far in mean the `overlay*.ini` files are not the game's own, so they move twice. A squashed HUD means the three HUD changes in [Patch part 5](#patch-part-5-hud-proportions) are missing.
 
 ### Finish-result text position does not move through `.ini`
 

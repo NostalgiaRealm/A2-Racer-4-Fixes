@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	patcherVersion  = "1.2.0"
+	patcherVersion  = "1.3.0"
 	gameFileName    = "spel.dat"
 	menuFileName    = "menu.exe"
 	backupDir       = "4x3_backup"
@@ -28,43 +28,18 @@ var overlayNames = []string{
 	"overlay4.ini", "overlay5.ini", "overlay6.ini", extraCarOverlay,
 }
 
-var widthOffsets = []int{
-	0x1B3798,
-	0x1B37EC,
-	0x1B3800,
-	0x1B3814,
-	0x1B3864,
-	0x1B3878,
-	0x1B388C,
-	0x1B38A0,
-	0x1B38B4,
-	0x1B3904,
-	0x1B3918,
-	0x1B392C,
-}
-
-var heightOffsets = []int{
-	0x1B379C,
-	0x1B37F0,
-	0x1B3804,
-	0x1B3818,
-	0x1B3868,
-	0x1B387C,
-	0x1B3890,
-	0x1B38A4,
-	0x1B38B8,
-	0x1B3908,
-	0x1B391C,
-	0x1B3930,
-}
-
-// The transparency fix and the spel.dat side of the CD removal, see applyPatch.
+// Connects the added code to the game, and the spel.dat side of the CD removal,
+// see applyPatch.
 var fixPatches = []struct {
 	offset      int
 	original    []byte
 	replacement []byte
 	label       string
 }{
+	{0x0582AA, []byte{0xE8, 0x31, 0xFE, 0xFF, 0xFF}, []byte{0xE8, 0xA2, 0xD3, 0x11, 0x00}, "startup call"},
+	{0x07FDCF, []byte{0xE8, 0x9C, 0x11, 0x00, 0x00}, []byte{0xE8, 0x69, 0x59, 0x0F, 0x00}, "HUD position read"},
+	{0x07FF43, []byte{0xE8, 0x28, 0x10, 0x00, 0x00}, []byte{0xE8, 0xF5, 0x57, 0x0F, 0x00}, "HUD position read"},
+	{0x080610, []byte{0xE8, 0x5B, 0x09, 0x00, 0x00}, []byte{0xE8, 0x28, 0x51, 0x0F, 0x00}, "HUD position read"},
 	{0x0C287D, []byte{0x8E}, []byte{0x8D}, "alpha format choice"},
 	{0x0C058A, []byte{0xE8, 0x01, 0x26, 0x00, 0x00}, []byte{0xE8, 0x71, 0x4F, 0x0B, 0x00}, "texture format choice"},
 	{0x0C7FF9, []byte{0x03, 0xC6, 0x5E, 0x5B, 0xC3}, []byte{0xE9, 0x70, 0xD5, 0x0A, 0x00}, "24-bit color conversion"},
@@ -88,11 +63,15 @@ var fixPatches = []struct {
 	{0x0B5E4D, []byte{0x8B, 0x08, 0x50, 0xFF, 0x51, 0x5C}, []byte{0x50, 0xE8, 0x37, 0xF7, 0x0B, 0x00}, "alpha blend switch"},
 	{0x0B5E6C, []byte{0x8B, 0x10, 0x50, 0xFF, 0x52, 0x5C}, []byte{0x50, 0xE8, 0x11, 0xF7, 0x0B, 0x00}, "alpha blend switch"},
 	{0x0C0F80, []byte{0x8B, 0x11, 0x50, 0x6A, 0x01, 0x51, 0xFF, 0x52, 0x30}, []byte{0x50, 0x6A, 0x01, 0x51, 0xE8, 0x68, 0x46, 0x0B, 0x00}, "viewport clear"},
+	{0x0C0679, []byte{0x8B, 0x08, 0x52, 0x50, 0xFF, 0x51, 0x18}, []byte{0x52, 0x50, 0xE8, 0xED, 0x51, 0x0B, 0x00}, "Z-buffer creation"},
 	{0x0001F8, []byte{0x4A, 0x44, 0x17, 0x00}, []byte{0x00, 0x50, 0x17, 0x00}, "code section size"},
 	{0x0CD478, []byte{0x68, 0x70}, []byte{0xEB, 0xB6}, "CD check"},
 }
 
-var alphaKeyCave = []byte{
+// Replaces the first of the two instructions that set the horizontal view.
+var horizontalViewCall = []byte{0xE8, 0x84, 0x48, 0x0B, 0x00, 0x90, 0x90}
+
+var spelPatchCode = []byte{
 	0x83, 0x7C, 0x24, 0x04, 0x03, 0x75, 0x60, 0xA1, 0x26, 0xB8, 0x73, 0x00,
 	0x83, 0xF8, 0xFF, 0x74, 0x56, 0x69, 0xC0, 0xB0, 0x00, 0x00, 0x00, 0x03,
 	0x05, 0xD8, 0xB7, 0x73, 0x00, 0x83, 0x78, 0x54, 0x10, 0x75, 0x44, 0xC7,
@@ -121,8 +100,79 @@ var alphaKeyCave = []byte{
 	0x8B, 0x04, 0x24, 0x8B, 0x08, 0xFF, 0x51, 0x30, 0x5A, 0x50, 0x52, 0x6A,
 	0x0F, 0xA1, 0xB4, 0xB4, 0x73, 0x00, 0x50, 0x8B, 0x08, 0xFF, 0x51, 0x5C,
 	0x58, 0xC2, 0x10, 0x00, 0x8B, 0x44, 0x24, 0x04, 0x8B, 0x08, 0xFF, 0x61,
-	0x30,
+	0x30, 0x60, 0x68, 0xC5, 0x58, 0x57, 0x00, 0xFF, 0x15, 0xA0, 0x60, 0x57,
+	0x00, 0x89, 0xC6, 0x85, 0xF6, 0x74, 0x12, 0x68, 0xE5, 0x58, 0x57, 0x00,
+	0x56, 0xFF, 0x15, 0xFC, 0x60, 0x57, 0x00, 0x85, 0xC0, 0x74, 0x02, 0xFF,
+	0xD0, 0x8B, 0x1D, 0x90, 0x59, 0x57, 0x00, 0x8B, 0x2D, 0x94, 0x59, 0x57,
+	0x00, 0x85, 0xDB, 0x75, 0x61, 0x81, 0xEC, 0x9C, 0x00, 0x00, 0x00, 0x89,
+	0xE7, 0xB9, 0x27, 0x00, 0x00, 0x00, 0x31, 0xC0, 0xF3, 0xAB, 0x66, 0xC7,
+	0x44, 0x24, 0x24, 0x9C, 0x00, 0x85, 0xF6, 0x74, 0x2B, 0x68, 0xD0, 0x58,
+	0x57, 0x00, 0x56, 0xFF, 0x15, 0xFC, 0x60, 0x57, 0x00, 0x85, 0xC0, 0x74,
+	0x1B, 0x54, 0x6A, 0xFF, 0x6A, 0x00, 0xFF, 0xD0, 0x85, 0xC0, 0x74, 0x10,
+	0x8B, 0x5C, 0x24, 0x6C, 0x8B, 0x6C, 0x24, 0x70, 0x85, 0xDB, 0x74, 0x04,
+	0x85, 0xED, 0x75, 0x14, 0x6A, 0x00, 0xFF, 0x15, 0xF4, 0x61, 0x57, 0x00,
+	0x89, 0xC3, 0x6A, 0x01, 0xFF, 0x15, 0xF4, 0x61, 0x57, 0x00, 0x89, 0xC5,
+	0x81, 0xC4, 0x9C, 0x00, 0x00, 0x00, 0xBE, 0x60, 0x59, 0x57, 0x00, 0xB9,
+	0x0C, 0x00, 0x00, 0x00, 0xAD, 0x89, 0x18, 0x89, 0x68, 0x04, 0xE2, 0xF8,
+	0x8D, 0x04, 0xAD, 0x01, 0x00, 0x00, 0x00, 0x31, 0xD2, 0xB9, 0x03, 0x00,
+	0x00, 0x00, 0xF7, 0xF1, 0xA3, 0xD0, 0x73, 0x59, 0x00, 0x61, 0xE9, 0xCD,
+	0x29, 0xEE, 0xFF, 0x50, 0xA1, 0x98, 0x37, 0x5B, 0x00, 0x8D, 0x04, 0x40,
+	0x50, 0xDB, 0x04, 0x24, 0xA1, 0x9C, 0x37, 0x5B, 0x00, 0xC1, 0xE0, 0x02,
+	0x89, 0x04, 0x24, 0xDA, 0x34, 0x24, 0x58, 0xD9, 0xC0, 0xD9, 0xE0, 0xD9,
+	0x5E, 0x14, 0xDC, 0xC0, 0xD9, 0x5E, 0x1C, 0x58, 0xC3, 0xFF, 0x74, 0x24,
+	0x0C, 0xFF, 0x74, 0x24, 0x0C, 0xFF, 0x74, 0x24, 0x0C, 0xE8, 0x22, 0xB8,
+	0xF0, 0xFF, 0x84, 0xC0, 0x74, 0x2D, 0x50, 0x8B, 0x44, 0x24, 0x08, 0x8B,
+	0x40, 0x04, 0x85, 0xC0, 0x74, 0x20, 0xE8, 0x4F, 0x00, 0x00, 0x00, 0x85,
+	0xC0, 0x74, 0x17, 0x50, 0xE8, 0x15, 0x00, 0x00, 0x00, 0x59, 0x0F, 0xAF,
+	0xC1, 0x50, 0xDB, 0x04, 0x24, 0x58, 0x8B, 0x4C, 0x24, 0x10, 0xD8, 0x01,
+	0xD9, 0x19, 0x58, 0xC2, 0x0C, 0x00, 0xA1, 0x98, 0x37, 0x5B, 0x00, 0x8D,
+	0x04, 0x40, 0x8B, 0x0D, 0x9C, 0x37, 0x5B, 0x00, 0x8D, 0x14, 0x8D, 0x00,
+	0x00, 0x00, 0x00, 0x29, 0xD0, 0x69, 0xC0, 0x40, 0x1F, 0x00, 0x00, 0x6B,
+	0xC9, 0x63, 0x89, 0xCA, 0xD1, 0xEA, 0x85, 0xC0, 0x79, 0x02, 0xF7, 0xDA,
+	0x01, 0xD0, 0x99, 0xF7, 0xF9, 0xC3, 0x56, 0x57, 0x89, 0xC6, 0x83, 0xEC,
+	0x40, 0x89, 0xE2, 0x6A, 0x40, 0x52, 0x68, 0x34, 0xA0, 0x5A, 0x00, 0x56,
+	0xE8, 0x47, 0xE5, 0xF4, 0xFF, 0x83, 0xC4, 0x10, 0x89, 0xE0, 0xBF, 0xF8,
+	0x58, 0x57, 0x00, 0xE8, 0x6A, 0x00, 0x00, 0x00, 0x74, 0x58, 0x89, 0xF0,
+	0xBF, 0x11, 0x59, 0x57, 0x00, 0xE8, 0x5C, 0x00, 0x00, 0x00, 0x74, 0x4A,
+	0x89, 0xF0, 0xBF, 0x28, 0x59, 0x57, 0x00, 0xE8, 0x4E, 0x00, 0x00, 0x00,
+	0x74, 0x3C, 0x89, 0xF0, 0xBF, 0x37, 0x59, 0x57, 0x00, 0xE8, 0x40, 0x00,
+	0x00, 0x00, 0x74, 0x2E, 0x89, 0xE0, 0xBF, 0x04, 0x59, 0x57, 0x00, 0xE8,
+	0x32, 0x00, 0x00, 0x00, 0x74, 0x27, 0x89, 0xF0, 0xBF, 0x46, 0x59, 0x57,
+	0x00, 0xE8, 0x2F, 0x00, 0x00, 0x00, 0x74, 0x19, 0x89, 0xF0, 0xBF, 0x55,
+	0x59, 0x57, 0x00, 0xE8, 0x21, 0x00, 0x00, 0x00, 0x74, 0x0B, 0x31, 0xC0,
+	0xEB, 0x0A, 0xB8, 0x01, 0x00, 0x00, 0x00, 0xEB, 0x03, 0x83, 0xC8, 0xFF,
+	0x83, 0xC4, 0x40, 0x5F, 0x5E, 0xC3, 0xE8, 0x06, 0x00, 0x00, 0x00, 0x75,
+	0x03, 0x80, 0x38, 0x00, 0xC3, 0x57, 0x8A, 0x0F, 0x84, 0xC9, 0x74, 0x17,
+	0x8A, 0x28, 0x80, 0xFD, 0x61, 0x72, 0x08, 0x80, 0xFD, 0x7A, 0x77, 0x03,
+	0x80, 0xED, 0x20, 0x38, 0xCD, 0x75, 0x04, 0x40, 0x47, 0xEB, 0xE3, 0x5F,
+	0xC3, 0x56, 0x8B, 0x74, 0x24, 0x0C, 0xFF, 0x15, 0xAC, 0x60, 0x57, 0x00,
+	0x3C, 0x06, 0x72, 0x27, 0xC7, 0x46, 0x18, 0x18, 0x00, 0x00, 0x00, 0xE8,
+	0x24, 0x00, 0x00, 0x00, 0x85, 0xC0, 0x74, 0x1C, 0xC7, 0x46, 0x18, 0x20,
+	0x00, 0x00, 0x00, 0xE8, 0x14, 0x00, 0x00, 0x00, 0x85, 0xC0, 0x74, 0x0C,
+	0xC7, 0x46, 0x18, 0x10, 0x00, 0x00, 0x00, 0xE8, 0x04, 0x00, 0x00, 0x00,
+	0x5E, 0xC2, 0x10, 0x00, 0xFF, 0x74, 0x24, 0x18, 0xFF, 0x74, 0x24, 0x18,
+	0xFF, 0x74, 0x24, 0x18, 0xFF, 0x74, 0x24, 0x18, 0x8B, 0x04, 0x24, 0x8B,
+	0x08, 0xFF, 0x51, 0x18, 0xC3, 0x55, 0x53, 0x45, 0x52, 0x33, 0x32, 0x2E,
+	0x44, 0x4C, 0x4C, 0x00, 0x45, 0x6E, 0x75, 0x6D, 0x44, 0x69, 0x73, 0x70,
+	0x6C, 0x61, 0x79, 0x53, 0x65, 0x74, 0x74, 0x69, 0x6E, 0x67, 0x73, 0x41,
+	0x00, 0x53, 0x65, 0x74, 0x50, 0x72, 0x6F, 0x63, 0x65, 0x73, 0x73, 0x44,
+	0x50, 0x49, 0x41, 0x77, 0x61, 0x72, 0x65, 0x00, 0x53, 0x50, 0x45, 0x45,
+	0x44, 0x4F, 0x4D, 0x45, 0x54, 0x45, 0x52, 0x00, 0x43, 0x4F, 0x4D, 0x4D,
+	0x55, 0x4E, 0x49, 0x43, 0x41, 0x54, 0x4F, 0x52, 0x00, 0x53, 0x54, 0x52,
+	0x49, 0x4E, 0x47, 0x5F, 0x52, 0x41, 0x43, 0x45, 0x5F, 0x54, 0x49, 0x4D,
+	0x45, 0x5F, 0x56, 0x41, 0x4C, 0x55, 0x45, 0x00, 0x53, 0x54, 0x52, 0x49,
+	0x4E, 0x47, 0x5F, 0x43, 0x55, 0x52, 0x5F, 0x4C, 0x41, 0x50, 0x00, 0x53,
+	0x54, 0x52, 0x49, 0x4E, 0x47, 0x5F, 0x43, 0x55, 0x52, 0x5F, 0x50, 0x4F,
+	0x53, 0x00, 0x4F, 0x56, 0x4C, 0x5F, 0x50, 0x4F, 0x52, 0x54, 0x52, 0x41,
+	0x49, 0x54, 0x53, 0x5F, 0x00, 0x50, 0x4C, 0x41, 0x59, 0x45, 0x52, 0x5F,
+	0x00, 0x90, 0x90, 0x90, 0x98, 0x37, 0x5B, 0x00, 0xEC, 0x37, 0x5B, 0x00,
+	0x00, 0x38, 0x5B, 0x00, 0x14, 0x38, 0x5B, 0x00, 0x64, 0x38, 0x5B, 0x00,
+	0x78, 0x38, 0x5B, 0x00, 0x8C, 0x38, 0x5B, 0x00, 0xA0, 0x38, 0x5B, 0x00,
+	0xB4, 0x38, 0x5B, 0x00, 0x04, 0x39, 0x5B, 0x00, 0x18, 0x39, 0x5B, 0x00,
+	0x2C, 0x39, 0x5B, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 }
+
+const patchCodeOffset = 0x175500
 
 // menu.exe stops at a "CD not found" dialog unless it finds DATA\INTRO1.MPG on a
 // drive. Nothing else depends on that search: the menu plays the intro from the
@@ -177,15 +227,19 @@ func run() bool {
 	}
 
 	fmt.Println()
-	fmt.Printf("Created patched %s for %dx%d.\n", gameFileName, width, height)
+	if width == 0 {
+		fmt.Printf("Created patched %s. The game now follows the resolution of your display.\n", gameFileName)
+	} else {
+		fmt.Printf("Created patched %s, fixed at %dx%d.\n", gameFileName, width, height)
+	}
 	fmt.Println("The texture memory crash fix, the transparency fix for current graphics")
 	fmt.Println("drivers and the CD check removal are included.")
 	fmt.Println()
 
-	if err := installOverlays(gameDir, width, height); err != nil {
+	if err := restoreOverlays(gameDir); err != nil {
 		fmt.Println()
-		fmt.Println("Copying the HUD files failed:", err)
-		fmt.Println(gameFileName + " is patched, but not every HUD file was installed.")
+		fmt.Println("Restoring the HUD files failed:", err)
+		fmt.Println(gameFileName + " is patched, but the HUD will be misplaced.")
 		fmt.Println("Fix the problem and run the patcher again.")
 		return false
 	}
@@ -375,8 +429,9 @@ func backupPathFor(gameDir string, name string) (string, error) {
 	return path, nil
 }
 
+// askResolution returns 0, 0 when the game should follow the display.
 func askResolution(reader *bufio.Reader) (int, int, error) {
-	fmt.Print("Enter desired resolution, for example 2560x1440: ")
+	fmt.Print("Press Enter to follow the resolution of your display, or type a fixed one such as 2560x1440: ")
 
 	line, err := reader.ReadString('\n')
 	if err != nil && len(line) == 0 {
@@ -384,6 +439,9 @@ func askResolution(reader *bufio.Reader) (int, int, error) {
 	}
 
 	line = strings.TrimSpace(line)
+	if line == "" {
+		return 0, 0, nil
+	}
 
 	re := regexp.MustCompile(`(?i)^\s*([0-9]{3,5})\s*x\s*([0-9]{3,5})\s*$`)
 	matches := re.FindStringSubmatch(line)
@@ -429,8 +487,25 @@ func patchInPlace(gameDir string, width int, height int) error {
 		return unchanged(fmt.Errorf("%s does not look like a Windows PE executable", gameFileName))
 	}
 
-	patched := make([]byte, len(data))
-	copy(patched, data)
+	source := data
+	if !patchCodeFits(source) {
+		// An older version of this patch has other code in that place, so start from
+		// the file it was made from.
+		backup, hasBackup := findFile(filepath.Join(gameDir, backupDir), gameFileName)
+		if !hasBackup {
+			return unchanged(fmt.Errorf("%s has unknown code at 0x%X and %s holds no original to start from", gameFileName, patchCodeOffset, backupDir))
+		}
+		source, err = os.ReadFile(backup)
+		if err != nil {
+			return unchanged(fmt.Errorf("could not read %s: %v", backup, err))
+		}
+		if !patchCodeFits(source) {
+			return unchanged(fmt.Errorf("%s and the copy in %s both have unknown code at 0x%X", gameFileName, backupDir, patchCodeOffset))
+		}
+	}
+
+	patched := make([]byte, len(source))
+	copy(patched, source)
 
 	if err := applyPatch(patched, width, height); err != nil {
 		return unchanged(err)
@@ -454,6 +529,17 @@ func patchInPlace(gameDir string, width int, height int) error {
 	}
 
 	return nil
+}
+
+// patchCodeFits says whether the added code can go into this file: the place for
+// it is empty, or already holds this version of the code.
+func patchCodeFits(data []byte) bool {
+	size := len(spelPatchCode) - 8
+	if len(data) < patchCodeOffset+size {
+		return false
+	}
+	place := data[patchCodeOffset : patchCodeOffset+size]
+	return bytes.Equal(place, spelPatchCode[:size]) || bytes.Equal(place, make([]byte, size))
 }
 
 // patchMenu removes the CD check from menu.exe. A file that already has the
@@ -502,34 +588,6 @@ func patchMenu(gameDir string) error {
 	return nil
 }
 
-// hudShift is how far HUD elements attached to a screen edge move, in the
-// game's HUD units. The game places HUD x at x*0.99/320-1 in view space, and the
-// view reaches +-0.75*width/height, so the edges move by
-// (0.75*width/height-1)*320/0.99, which is 0 at 4:3.
-func hudShift(width int, height int) int {
-	numerator := (3*width - 4*height) * 8000
-	denominator := 99 * height
-	if numerator < 0 {
-		return (numerator - denominator/2) / denominator
-	}
-	return (numerator + denominator/2) / denominator
-}
-
-// hudEdge says which screen edge a HUD element is attached to: -1 left, 1 right,
-// 0 for elements that stay centered or that the game places itself.
-func hudEdge(section string, parent string) int {
-	name := strings.ToUpper(section)
-	switch {
-	case strings.EqualFold(parent, "Speedometer"),
-		name == "STRING_RACE_TIME_VALUE", name == "STRING_CUR_LAP", name == "STRING_CUR_POS":
-		return 1
-	case strings.EqualFold(parent, "Communicator"),
-		strings.HasPrefix(name, "OVL_PORTRAITS_"), strings.HasPrefix(name, "PLAYER_"):
-		return -1
-	}
-	return 0
-}
-
 // iniLine splits an overlay file line into its section name, or its key and the
 // position of its value. Comments start with a semicolon.
 func iniLine(line string) (section string, key string, valueStart int) {
@@ -558,95 +616,9 @@ func iniLine(line string) (section string, key string, valueStart int) {
 	return "", strings.ToLower(strings.TrimSpace(content[:equals])), valueStart
 }
 
-// shiftDecimal adds shift to the number at the start of value, which may have up
-// to three decimals, and returns the new number and how long the old one was.
-func shiftDecimal(value string, shift int) (string, int, bool) {
-	i := 0
-	negative := i < len(value) && value[i] == '-'
-	if negative {
-		i++
-	}
-
-	start := i
-	whole := 0
-	for i < len(value) && value[i] >= '0' && value[i] <= '9' {
-		whole = whole*10 + int(value[i]-'0')
-		i++
-	}
-	if i == start || whole > 1000000 {
-		return "", 0, false
-	}
-
-	milli := whole * 1000
-	if i < len(value) && value[i] == '.' {
-		i++
-		for unit := 100; i < len(value) && value[i] >= '0' && value[i] <= '9'; i++ {
-			if unit == 0 {
-				return "", 0, false
-			}
-			milli += int(value[i]-'0') * unit
-			unit /= 10
-		}
-	}
-	if negative {
-		milli = -milli
-	}
-	milli += shift * 1000
-
-	sign := ""
-	if milli < 0 {
-		sign = "-"
-		milli = -milli
-	}
-	text := sign + strconv.Itoa(milli/1000)
-	if milli%1000 != 0 {
-		fraction := strconv.Itoa(1000 + milli%1000)[1:]
-		text += "." + strings.TrimRight(fraction, "0")
-	}
-	return text, i, true
-}
-
-// transformOverlay returns an original overlay file with every element that is
-// attached to a screen edge moved to that edge for the chosen resolution. The
-// rest of the file stays as it is, so the HUD keeps its original size.
-func transformOverlay(data []byte, shift int) []byte {
-	lines := strings.SplitAfter(string(data), "\n")
-
-	parents := map[string]string{}
-	section := ""
-	for _, line := range lines {
-		name, key, valueStart := iniLine(line)
-		if name != "" {
-			section = name
-		} else if key == "parent" {
-			value := line[valueStart:]
-			if i := strings.IndexAny(value, " \t\r\n;"); i >= 0 {
-				value = value[:i]
-			}
-			parents[section] = value
-		}
-	}
-
-	var result bytes.Buffer
-	section = ""
-	for _, line := range lines {
-		name, key, valueStart := iniLine(line)
-		if name != "" {
-			section = name
-		} else if key == "position" {
-			if edge := hudEdge(section, parents[section]); edge != 0 {
-				if text, size, ok := shiftDecimal(line[valueStart:], edge*shift); ok {
-					line = line[:valueStart] + text + line[valueStart+size:]
-				}
-			}
-		}
-		result.WriteString(line)
-	}
-	return result.Bytes()
-}
-
-// isOriginalOverlay recognizes the game's own HUD layout. Moving a file that an
-// earlier patcher or a hand tuned HUD already changed would give a wrong result.
+// isOriginalOverlay recognizes the game's own HUD layout. The game moves it to the
+// screen edges by itself, so a file that an earlier patcher or a hand tuned HUD
+// already moved would end up in the wrong place.
 func isOriginalOverlay(data []byte) bool {
 	section := ""
 	found := 0
@@ -702,27 +674,21 @@ func originalOverlay(gameDir string, name string) ([]byte, error) {
 	return nil, fmt.Errorf("no original %s found: it was changed by an older HUD fix. Restore it from the game CD and run the patcher again", name)
 }
 
-// installOverlays writes the HUD overlay files for the chosen resolution, made
-// from the game's own files, and moves the files they replace to the backup
-// folder. overlay7.ini comes with the "Schaduw" extra car update, which would
-// overwrite it again, so it is only written when that update is already installed.
-func installOverlays(gameDir string, width int, height int) error {
-	shift := hudShift(width, height)
-
+// restoreOverlays puts back the game's own overlay files where an older version
+// of this patch changed them, and moves the changed files to the backup folder.
+func restoreOverlays(gameDir string) error {
 	for _, name := range overlayNames {
 		target, exists := findFile(gameDir, name)
 
+		// Only the "Schaduw" extra car update brings this one.
 		if name == extraCarOverlay && !exists {
-			fmt.Printf("Skipped %s: the \"Schaduw\" extra car update is not installed.\n", name)
-			fmt.Println("  Install that update first, then run the patcher again.")
 			continue
 		}
 
-		original, err := originalOverlay(gameDir, name)
+		data, err := originalOverlay(gameDir, name)
 		if err != nil {
 			return err
 		}
-		data := transformOverlay(original, shift)
 
 		backupPath := ""
 		if exists {
@@ -732,7 +698,6 @@ func installOverlays(gameDir string, width int, height int) error {
 			}
 
 			if bytes.Equal(current, data) {
-				fmt.Printf("%s is already up to date.\n", name)
 				continue
 			}
 
@@ -742,69 +707,27 @@ func installOverlays(gameDir string, width int, height int) error {
 			}
 
 			if err := os.Rename(target, backupPath); err != nil {
-				return fmt.Errorf("could not move original %s to %s: %v", name, backupPath, err)
+				return fmt.Errorf("could not move %s to %s: %v", name, backupPath, err)
 			}
 		}
 
 		if err := writeVerified(target, data); err != nil {
-			// Try to restore the original if writing fails.
+			// Try to put the file back if writing fails.
 			if backupPath != "" {
 				if restoreErr := os.Rename(backupPath, target); restoreErr != nil {
-					return fmt.Errorf("could not write %s: %v. The original is still in %s", name, err, backupPath)
+					return fmt.Errorf("could not write %s: %v. The earlier file is still in %s", name, err, backupPath)
 				}
 			}
 			return fmt.Errorf("could not write %s: %v", name, err)
 		}
 
-		fmt.Printf("Installed %s\n", name)
+		fmt.Printf("Restored the original %s\n", name)
 	}
 
 	return nil
 }
 
-// floatBits returns numerator/denominator as a 32-bit float, rounded to nearest.
-// It uses only integers, so every build of the patcher writes the same bytes.
-// Both values have to stay below 2^24.
-func floatBits(numerator uint32, denominator uint32) uint32 {
-	exponent := uint32(127)
-	for numerator < denominator {
-		numerator *= 2
-		exponent--
-	}
-	for numerator >= denominator*2 {
-		denominator *= 2
-		exponent++
-	}
-
-	mantissa := uint32(0)
-	for i := 0; i < 24; i++ {
-		mantissa *= 2
-		if numerator >= denominator {
-			mantissa++
-			numerator -= denominator
-		}
-		numerator *= 2
-	}
-	if numerator >= denominator {
-		mantissa++
-		if mantissa == 1<<24 {
-			mantissa = 1 << 23
-			exponent++
-		}
-	}
-
-	return exponent<<23 | (mantissa & 0x7FFFFF)
-}
-
 func applyPatch(data []byte, width int, height int) error {
-	putU16 := func(offset int, value uint16) error {
-		if offset < 0 || offset+2 > len(data) {
-			return fmt.Errorf("offset 0x%X is outside the file", offset)
-		}
-		binary.LittleEndian.PutUint16(data[offset:offset+2], value)
-		return nil
-	}
-
 	putU32 := func(offset int, value uint32) error {
 		if offset < 0 || offset+4 > len(data) {
 			return fmt.Errorf("offset 0x%X is outside the file", offset)
@@ -832,28 +755,10 @@ func applyPatch(data []byte, width int, height int) error {
 		return nil
 	}
 
-	for _, offset := range widthOffsets {
-		if err := putU16(offset, uint16(width)); err != nil {
-			return err
-		}
-	}
-
-	for _, offset := range heightOffsets {
-		if err := putU16(offset, uint16(height)); err != nil {
-			return err
-		}
-	}
-
-	// Keep a 4:3 projection reference width for the chosen output height.
-	// Examples:
-	// 1080 -> 1440
-	// 1440 -> 1920
-	// 2160 -> 2880
-	aspectDenominator := uint32((height*4 + 1) / 3)
-
-	if err := putU32(0x1973D0, aspectDenominator); err != nil {
-		return err
-	}
+	// Everything that depends on the resolution is filled in at startup, in memory,
+	// by the added code in spel_patch.asm: the display mode tables, the 4:3 reference
+	// width at 0x005973D0 and the HUD positions. That reference width is 4:3 for the
+	// output height. Examples: 1080 -> 1440, 1440 -> 1920, 2160 -> 2880.
 
 	// Redirect viewport aspect division:
 	// fidiv dword ptr ds:0x005B3798 -> fidiv dword ptr ds:0x005973D0
@@ -891,26 +796,21 @@ func applyPatch(data []byte, width int, height int) error {
 		}
 	}
 
-	// The horizontal view for this screen shape: with the vertical view fixed at
-	// +-0.75, +-0.75*width/height gives square pixels, and exactly +-1 at 4:3.
-	// mov dword ptr [esi+0x14], -0.75*width/height
-	// mov dword ptr [esi+0x1C], 1.5*width/height
-	clip := []struct {
-		offset int
-		opcode []byte
-		label  string
-		value  uint32
-	}{
-		{0x0C0E8A, []byte{0xC7, 0x46, 0x14}, "horizontal clip x", floatBits(uint32(3*width), uint32(4*height)) | 0x80000000},
-		{0x0C0E96, []byte{0xC7, 0x46, 0x1C}, "horizontal clip width", floatBits(uint32(3*width), uint32(2*height))},
+	// The horizontal view for this screen shape comes from the added code too.
+	// mov dword ptr [esi+0x14], -1.0 -> call set_horizontal_view
+	// mov dword ptr [esi+0x1C], 2.0 -> nop. Older versions of this patch changed the
+	// values in these instructions, so only the opcodes are checked.
+	if !bytes.Equal(data[0x0C0E8A:0x0C0E8A+7], horizontalViewCall) {
+		if !bytes.Equal(data[0x0C0E8A:0x0C0E8D], []byte{0xC7, 0x46, 0x14}) {
+			return fmt.Errorf("horizontal view bytes did not match expected original pattern at 0xC0E8A. This may be the wrong spel.dat version")
+		}
+		copy(data[0x0C0E8A:], horizontalViewCall)
 	}
-	for _, c := range clip {
-		if !bytes.Equal(data[c.offset:c.offset+3], c.opcode) {
-			return fmt.Errorf("%s bytes did not match expected original pattern at 0x%X. This may be the wrong spel.dat version", c.label, c.offset)
+	if !bytes.Equal(data[0x0C0E96:0x0C0E96+7], []byte{0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90}) {
+		if !bytes.Equal(data[0x0C0E96:0x0C0E99], []byte{0xC7, 0x46, 0x1C}) {
+			return fmt.Errorf("horizontal view bytes did not match expected original pattern at 0xC0E96. This may be the wrong spel.dat version")
 		}
-		if err := putU32(c.offset+3, c.value); err != nil {
-			return err
-		}
+		copy(data[0x0C0E96:], []byte{0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90})
 	}
 
 	// Texture memory crash fix (not related to the resolution):
@@ -933,13 +833,22 @@ func applyPatch(data []byte, width int, height int) error {
 	// texels with a color key on 16-bit textures, which shows as black around objects
 	// on some current graphics drivers. Use the 1-bit alpha texture format instead,
 	// clear alpha on transparent texels only, discard them with the alpha test and
-	// turn the color key off. The code is in alpha_key_patch.asm, in unused
-	// space at the end of the code section, and fixPatches connects it to the game.
+	// turn the color key off.
 	//
-	// CD check removal, also in fixPatches: when no drive holds the game CD, the game
-	// carries on instead of stopping with an error. All game files are in the game
-	// folder after installing, and a CD that is present is still used as before.
-	if err := patchBytes(0x175500, make([]byte, len(alphaKeyCave)), alphaKeyCave, "transparency code"); err != nil {
+	// CD check removal: when no drive holds the game CD, the game carries on instead
+	// of stopping with an error. All game files are in the game folder after
+	// installing, and a CD that is present is still used as before.
+	//
+	// Both are in fixPatches, with the added code. The last two values of that code
+	// are a fixed resolution, or 0 to follow the display.
+	codeSize := len(spelPatchCode) - 8
+	if err := patchBytes(patchCodeOffset, make([]byte, codeSize), spelPatchCode[:codeSize], "added code"); err != nil {
+		return err
+	}
+	if err := putU32(patchCodeOffset+codeSize, uint32(width)); err != nil {
+		return err
+	}
+	if err := putU32(patchCodeOffset+codeSize+4, uint32(height)); err != nil {
 		return err
 	}
 	for _, p := range fixPatches {

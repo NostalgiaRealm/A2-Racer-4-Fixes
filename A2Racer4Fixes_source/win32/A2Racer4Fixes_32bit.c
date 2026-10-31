@@ -11,7 +11,7 @@
  */
 #include <windows.h>
 
-#define PATCHER_VERSION "1.2.0"
+#define PATCHER_VERSION "1.3.0"
 #define GAME_FILE "spel.dat"
 #define MENU_FILE "menu.exe"
 #define BACKUP_DIR "4x3_backup"
@@ -22,16 +22,6 @@
 static const char *const overlay_names[] = {
 	"overlay0.ini", "overlay1.ini", "overlay2.ini", "overlay3.ini",
 	"overlay4.ini", "overlay5.ini", "overlay6.ini", EXTRA_CAR_OVERLAY,
-};
-
-static const DWORD width_offsets[] = {
-	0x1B3798, 0x1B37EC, 0x1B3800, 0x1B3814, 0x1B3864, 0x1B3878,
-	0x1B388C, 0x1B38A0, 0x1B38B4, 0x1B3904, 0x1B3918, 0x1B392C,
-};
-
-static const DWORD height_offsets[] = {
-	0x1B379C, 0x1B37F0, 0x1B3804, 0x1B3818, 0x1B3868, 0x1B387C,
-	0x1B3890, 0x1B38A4, 0x1B38B8, 0x1B3908, 0x1B391C, 0x1B3930,
 };
 
 /* The code changes, see applyPatch in the Go patcher for what each does. */
@@ -57,6 +47,18 @@ static const struct {
 	{0x0BC0F0, "texture memory probe", 11,
 		{0xB8, 0x00, 0x10, 0x00, 0x00, 0xE8, 0x06, 0xD3, 0x09, 0x00, 0x53},
 		{0xC7, 0x81, 0xA1, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0xC3}},
+	{0x0582AA, "startup call", 5,
+		{0xE8, 0x31, 0xFE, 0xFF, 0xFF},
+		{0xE8, 0xA2, 0xD3, 0x11, 0x00}},
+	{0x07FDCF, "HUD position read", 5,
+		{0xE8, 0x9C, 0x11, 0x00, 0x00},
+		{0xE8, 0x69, 0x59, 0x0F, 0x00}},
+	{0x07FF43, "HUD position read", 5,
+		{0xE8, 0x28, 0x10, 0x00, 0x00},
+		{0xE8, 0xF5, 0x57, 0x0F, 0x00}},
+	{0x080610, "HUD position read", 5,
+		{0xE8, 0x5B, 0x09, 0x00, 0x00},
+		{0xE8, 0x28, 0x51, 0x0F, 0x00}},
 	{0x0C287D, "alpha format choice", 1,
 		{0x8E},
 		{0x8D}},
@@ -126,6 +128,9 @@ static const struct {
 	{0x0C0F80, "viewport clear", 9,
 		{0x8B, 0x11, 0x50, 0x6A, 0x01, 0x51, 0xFF, 0x52, 0x30},
 		{0x50, 0x6A, 0x01, 0x51, 0xE8, 0x68, 0x46, 0x0B, 0x00}},
+	{0x0C0679, "Z-buffer creation", 7,
+		{0x8B, 0x08, 0x52, 0x50, 0xFF, 0x51, 0x18},
+		{0x52, 0x50, 0xE8, 0xED, 0x51, 0x0B, 0x00}},
 	{0x0001F8, "code section size", 4,
 		{0x4A, 0x44, 0x17, 0x00},
 		{0x00, 0x50, 0x17, 0x00}},
@@ -134,10 +139,10 @@ static const struct {
 		{0xEB, 0xB6}},
 };
 
-/* The transparency fix code from ../alpha_key_patch.asm, at the end of the code
-   section. */
-#define ALPHA_KEY_CAVE_OFFSET 0x175500
-static const unsigned char alpha_key_cave[] = {
+/* The added code from ../spel_patch.asm, at the end of the code section. Its last
+   two values are a fixed resolution, or 0 to follow the display. */
+#define PATCH_CODE_OFFSET 0x175500
+static const unsigned char spel_patch_code[] = {
 	0x83, 0x7C, 0x24, 0x04, 0x03, 0x75, 0x60, 0xA1, 0x26, 0xB8, 0x73, 0x00,
 	0x83, 0xF8, 0xFF, 0x74, 0x56, 0x69, 0xC0, 0xB0, 0x00, 0x00, 0x00, 0x03,
 	0x05, 0xD8, 0xB7, 0x73, 0x00, 0x83, 0x78, 0x54, 0x10, 0x75, 0x44, 0xC7,
@@ -166,8 +171,85 @@ static const unsigned char alpha_key_cave[] = {
 	0x8B, 0x04, 0x24, 0x8B, 0x08, 0xFF, 0x51, 0x30, 0x5A, 0x50, 0x52, 0x6A,
 	0x0F, 0xA1, 0xB4, 0xB4, 0x73, 0x00, 0x50, 0x8B, 0x08, 0xFF, 0x51, 0x5C,
 	0x58, 0xC2, 0x10, 0x00, 0x8B, 0x44, 0x24, 0x04, 0x8B, 0x08, 0xFF, 0x61,
-	0x30,
+	0x30, 0x60, 0x68, 0xC5, 0x58, 0x57, 0x00, 0xFF, 0x15, 0xA0, 0x60, 0x57,
+	0x00, 0x89, 0xC6, 0x85, 0xF6, 0x74, 0x12, 0x68, 0xE5, 0x58, 0x57, 0x00,
+	0x56, 0xFF, 0x15, 0xFC, 0x60, 0x57, 0x00, 0x85, 0xC0, 0x74, 0x02, 0xFF,
+	0xD0, 0x8B, 0x1D, 0x90, 0x59, 0x57, 0x00, 0x8B, 0x2D, 0x94, 0x59, 0x57,
+	0x00, 0x85, 0xDB, 0x75, 0x61, 0x81, 0xEC, 0x9C, 0x00, 0x00, 0x00, 0x89,
+	0xE7, 0xB9, 0x27, 0x00, 0x00, 0x00, 0x31, 0xC0, 0xF3, 0xAB, 0x66, 0xC7,
+	0x44, 0x24, 0x24, 0x9C, 0x00, 0x85, 0xF6, 0x74, 0x2B, 0x68, 0xD0, 0x58,
+	0x57, 0x00, 0x56, 0xFF, 0x15, 0xFC, 0x60, 0x57, 0x00, 0x85, 0xC0, 0x74,
+	0x1B, 0x54, 0x6A, 0xFF, 0x6A, 0x00, 0xFF, 0xD0, 0x85, 0xC0, 0x74, 0x10,
+	0x8B, 0x5C, 0x24, 0x6C, 0x8B, 0x6C, 0x24, 0x70, 0x85, 0xDB, 0x74, 0x04,
+	0x85, 0xED, 0x75, 0x14, 0x6A, 0x00, 0xFF, 0x15, 0xF4, 0x61, 0x57, 0x00,
+	0x89, 0xC3, 0x6A, 0x01, 0xFF, 0x15, 0xF4, 0x61, 0x57, 0x00, 0x89, 0xC5,
+	0x81, 0xC4, 0x9C, 0x00, 0x00, 0x00, 0xBE, 0x60, 0x59, 0x57, 0x00, 0xB9,
+	0x0C, 0x00, 0x00, 0x00, 0xAD, 0x89, 0x18, 0x89, 0x68, 0x04, 0xE2, 0xF8,
+	0x8D, 0x04, 0xAD, 0x01, 0x00, 0x00, 0x00, 0x31, 0xD2, 0xB9, 0x03, 0x00,
+	0x00, 0x00, 0xF7, 0xF1, 0xA3, 0xD0, 0x73, 0x59, 0x00, 0x61, 0xE9, 0xCD,
+	0x29, 0xEE, 0xFF, 0x50, 0xA1, 0x98, 0x37, 0x5B, 0x00, 0x8D, 0x04, 0x40,
+	0x50, 0xDB, 0x04, 0x24, 0xA1, 0x9C, 0x37, 0x5B, 0x00, 0xC1, 0xE0, 0x02,
+	0x89, 0x04, 0x24, 0xDA, 0x34, 0x24, 0x58, 0xD9, 0xC0, 0xD9, 0xE0, 0xD9,
+	0x5E, 0x14, 0xDC, 0xC0, 0xD9, 0x5E, 0x1C, 0x58, 0xC3, 0xFF, 0x74, 0x24,
+	0x0C, 0xFF, 0x74, 0x24, 0x0C, 0xFF, 0x74, 0x24, 0x0C, 0xE8, 0x22, 0xB8,
+	0xF0, 0xFF, 0x84, 0xC0, 0x74, 0x2D, 0x50, 0x8B, 0x44, 0x24, 0x08, 0x8B,
+	0x40, 0x04, 0x85, 0xC0, 0x74, 0x20, 0xE8, 0x4F, 0x00, 0x00, 0x00, 0x85,
+	0xC0, 0x74, 0x17, 0x50, 0xE8, 0x15, 0x00, 0x00, 0x00, 0x59, 0x0F, 0xAF,
+	0xC1, 0x50, 0xDB, 0x04, 0x24, 0x58, 0x8B, 0x4C, 0x24, 0x10, 0xD8, 0x01,
+	0xD9, 0x19, 0x58, 0xC2, 0x0C, 0x00, 0xA1, 0x98, 0x37, 0x5B, 0x00, 0x8D,
+	0x04, 0x40, 0x8B, 0x0D, 0x9C, 0x37, 0x5B, 0x00, 0x8D, 0x14, 0x8D, 0x00,
+	0x00, 0x00, 0x00, 0x29, 0xD0, 0x69, 0xC0, 0x40, 0x1F, 0x00, 0x00, 0x6B,
+	0xC9, 0x63, 0x89, 0xCA, 0xD1, 0xEA, 0x85, 0xC0, 0x79, 0x02, 0xF7, 0xDA,
+	0x01, 0xD0, 0x99, 0xF7, 0xF9, 0xC3, 0x56, 0x57, 0x89, 0xC6, 0x83, 0xEC,
+	0x40, 0x89, 0xE2, 0x6A, 0x40, 0x52, 0x68, 0x34, 0xA0, 0x5A, 0x00, 0x56,
+	0xE8, 0x47, 0xE5, 0xF4, 0xFF, 0x83, 0xC4, 0x10, 0x89, 0xE0, 0xBF, 0xF8,
+	0x58, 0x57, 0x00, 0xE8, 0x6A, 0x00, 0x00, 0x00, 0x74, 0x58, 0x89, 0xF0,
+	0xBF, 0x11, 0x59, 0x57, 0x00, 0xE8, 0x5C, 0x00, 0x00, 0x00, 0x74, 0x4A,
+	0x89, 0xF0, 0xBF, 0x28, 0x59, 0x57, 0x00, 0xE8, 0x4E, 0x00, 0x00, 0x00,
+	0x74, 0x3C, 0x89, 0xF0, 0xBF, 0x37, 0x59, 0x57, 0x00, 0xE8, 0x40, 0x00,
+	0x00, 0x00, 0x74, 0x2E, 0x89, 0xE0, 0xBF, 0x04, 0x59, 0x57, 0x00, 0xE8,
+	0x32, 0x00, 0x00, 0x00, 0x74, 0x27, 0x89, 0xF0, 0xBF, 0x46, 0x59, 0x57,
+	0x00, 0xE8, 0x2F, 0x00, 0x00, 0x00, 0x74, 0x19, 0x89, 0xF0, 0xBF, 0x55,
+	0x59, 0x57, 0x00, 0xE8, 0x21, 0x00, 0x00, 0x00, 0x74, 0x0B, 0x31, 0xC0,
+	0xEB, 0x0A, 0xB8, 0x01, 0x00, 0x00, 0x00, 0xEB, 0x03, 0x83, 0xC8, 0xFF,
+	0x83, 0xC4, 0x40, 0x5F, 0x5E, 0xC3, 0xE8, 0x06, 0x00, 0x00, 0x00, 0x75,
+	0x03, 0x80, 0x38, 0x00, 0xC3, 0x57, 0x8A, 0x0F, 0x84, 0xC9, 0x74, 0x17,
+	0x8A, 0x28, 0x80, 0xFD, 0x61, 0x72, 0x08, 0x80, 0xFD, 0x7A, 0x77, 0x03,
+	0x80, 0xED, 0x20, 0x38, 0xCD, 0x75, 0x04, 0x40, 0x47, 0xEB, 0xE3, 0x5F,
+	0xC3, 0x56, 0x8B, 0x74, 0x24, 0x0C, 0xFF, 0x15, 0xAC, 0x60, 0x57, 0x00,
+	0x3C, 0x06, 0x72, 0x27, 0xC7, 0x46, 0x18, 0x18, 0x00, 0x00, 0x00, 0xE8,
+	0x24, 0x00, 0x00, 0x00, 0x85, 0xC0, 0x74, 0x1C, 0xC7, 0x46, 0x18, 0x20,
+	0x00, 0x00, 0x00, 0xE8, 0x14, 0x00, 0x00, 0x00, 0x85, 0xC0, 0x74, 0x0C,
+	0xC7, 0x46, 0x18, 0x10, 0x00, 0x00, 0x00, 0xE8, 0x04, 0x00, 0x00, 0x00,
+	0x5E, 0xC2, 0x10, 0x00, 0xFF, 0x74, 0x24, 0x18, 0xFF, 0x74, 0x24, 0x18,
+	0xFF, 0x74, 0x24, 0x18, 0xFF, 0x74, 0x24, 0x18, 0x8B, 0x04, 0x24, 0x8B,
+	0x08, 0xFF, 0x51, 0x18, 0xC3, 0x55, 0x53, 0x45, 0x52, 0x33, 0x32, 0x2E,
+	0x44, 0x4C, 0x4C, 0x00, 0x45, 0x6E, 0x75, 0x6D, 0x44, 0x69, 0x73, 0x70,
+	0x6C, 0x61, 0x79, 0x53, 0x65, 0x74, 0x74, 0x69, 0x6E, 0x67, 0x73, 0x41,
+	0x00, 0x53, 0x65, 0x74, 0x50, 0x72, 0x6F, 0x63, 0x65, 0x73, 0x73, 0x44,
+	0x50, 0x49, 0x41, 0x77, 0x61, 0x72, 0x65, 0x00, 0x53, 0x50, 0x45, 0x45,
+	0x44, 0x4F, 0x4D, 0x45, 0x54, 0x45, 0x52, 0x00, 0x43, 0x4F, 0x4D, 0x4D,
+	0x55, 0x4E, 0x49, 0x43, 0x41, 0x54, 0x4F, 0x52, 0x00, 0x53, 0x54, 0x52,
+	0x49, 0x4E, 0x47, 0x5F, 0x52, 0x41, 0x43, 0x45, 0x5F, 0x54, 0x49, 0x4D,
+	0x45, 0x5F, 0x56, 0x41, 0x4C, 0x55, 0x45, 0x00, 0x53, 0x54, 0x52, 0x49,
+	0x4E, 0x47, 0x5F, 0x43, 0x55, 0x52, 0x5F, 0x4C, 0x41, 0x50, 0x00, 0x53,
+	0x54, 0x52, 0x49, 0x4E, 0x47, 0x5F, 0x43, 0x55, 0x52, 0x5F, 0x50, 0x4F,
+	0x53, 0x00, 0x4F, 0x56, 0x4C, 0x5F, 0x50, 0x4F, 0x52, 0x54, 0x52, 0x41,
+	0x49, 0x54, 0x53, 0x5F, 0x00, 0x50, 0x4C, 0x41, 0x59, 0x45, 0x52, 0x5F,
+	0x00, 0x90, 0x90, 0x90, 0x98, 0x37, 0x5B, 0x00, 0xEC, 0x37, 0x5B, 0x00,
+	0x00, 0x38, 0x5B, 0x00, 0x14, 0x38, 0x5B, 0x00, 0x64, 0x38, 0x5B, 0x00,
+	0x78, 0x38, 0x5B, 0x00, 0x8C, 0x38, 0x5B, 0x00, 0xA0, 0x38, 0x5B, 0x00,
+	0xB4, 0x38, 0x5B, 0x00, 0x04, 0x39, 0x5B, 0x00, 0x18, 0x39, 0x5B, 0x00,
+	0x2C, 0x39, 0x5B, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 };
+
+/* Replaces the first of the two instructions that set the horizontal view. */
+static const unsigned char horizontal_view_call[] = {0xE8, 0x84, 0x48, 0x0B, 0x00, 0x90, 0x90};
+#define PATCH_CODE_SIZE (sizeof(spel_patch_code) - 8)
+
+static const unsigned char nops[7] = {0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90};
+static const unsigned char view_x_opcode[] = {0xC7, 0x46, 0x14};
+static const unsigned char view_width_opcode[] = {0xC7, 0x46, 0x1C};
 
 /* See menuCheckOffset in the Go patcher. */
 #define MENU_CHECK_OFFSET 0x0A5154
@@ -528,18 +610,24 @@ static BOOL read_number(const char **text, int *value)
 	return digits >= 3 && digits <= 5;
 }
 
+/* Gives 0, 0 when the game should follow the display. */
 static BOOL ask_resolution(int *width, int *height)
 {
 	static char line[100];
 	const char *c = line;
 
-	say("Enter desired resolution, for example 2560x1440: ");
+	say("Press Enter to follow the resolution of your display, or type a fixed one such as 2560x1440: ");
 
 	if (!read_line(line, sizeof(line)))
 		return FAIL("EOF");
 
 	while (is_space(*c))
 		c++;
+	if (*c == 0) {
+		*width = 0;
+		*height = 0;
+		return TRUE;
+	}
 	if (!read_number(&c, width))
 		return FAIL("invalid resolution format. Use something like 2560x1440");
 	while (is_space(*c))
@@ -574,68 +662,28 @@ static void put_u32(char *data, DWORD offset, DWORD value)
 	put_u16(data, offset + 2, (int)(value >> 16));
 }
 
-/* numerator/denominator as a 32-bit float, rounded to nearest. It uses only
-   integers, so every build of the patcher writes the same bytes. */
-static DWORD float_bits(DWORD numerator, DWORD denominator)
+static BOOL patch_code_fits(const char *data, DWORD size)
 {
-	DWORD exponent = 127;
-	DWORD mantissa = 0;
-	int i;
+	unsigned int i;
 
-	while (numerator < denominator) {
-		numerator *= 2;
-		exponent--;
+	if (size < PATCH_CODE_OFFSET + PATCH_CODE_SIZE)
+		return FALSE;
+	if (same_bytes(data + PATCH_CODE_OFFSET, spel_patch_code, PATCH_CODE_SIZE))
+		return TRUE;
+	for (i = 0; i < PATCH_CODE_SIZE; i++) {
+		if (data[PATCH_CODE_OFFSET + i] != 0)
+			return FALSE;
 	}
-	while (numerator >= denominator * 2) {
-		denominator *= 2;
-		exponent++;
-	}
-
-	for (i = 0; i < 24; i++) {
-		mantissa *= 2;
-		if (numerator >= denominator) {
-			mantissa++;
-			numerator -= denominator;
-		}
-		numerator *= 2;
-	}
-	if (numerator >= denominator) {
-		mantissa++;
-		if (mantissa == 1UL << 24) {
-			mantissa = 1UL << 23;
-			exponent++;
-		}
-	}
-
-	return exponent << 23 | (mantissa & 0x7FFFFF);
+	return TRUE;
 }
-
-static const unsigned char clip_x_opcode[] = {0xC7, 0x46, 0x14};
-static const unsigned char clip_width_opcode[] = {0xC7, 0x46, 0x1C};
 
 static BOOL apply_patch(char *data, int width, int height)
 {
 	unsigned int i;
-	int aspect_denominator;
 
-	for (i = 0; i < sizeof(width_offsets) / sizeof(width_offsets[0]); i++)
-		put_u16(data, width_offsets[i], width);
-
-	for (i = 0; i < sizeof(height_offsets) / sizeof(height_offsets[0]); i++)
-		put_u16(data, height_offsets[i], height);
-
-	/* Keep a 4:3 projection reference width for the chosen output height. */
-	aspect_denominator = (height * 4 + 1) / 3;
-	put_u32(data, 0x1973D0, aspect_denominator);
-
-	if (!same_bytes(data + ALPHA_KEY_CAVE_OFFSET, alpha_key_cave, sizeof(alpha_key_cave))) {
-		for (i = 0; i < sizeof(alpha_key_cave); i++) {
-			if (data[ALPHA_KEY_CAVE_OFFSET + i] != 0)
-				return FAIL("transparency code bytes did not match expected original pattern at 0x%X. This may be the wrong " GAME_FILE " version",
-					ALPHA_KEY_CAVE_OFFSET);
-		}
-		memcpy(data + ALPHA_KEY_CAVE_OFFSET, alpha_key_cave, sizeof(alpha_key_cave));
-	}
+	memcpy(data + PATCH_CODE_OFFSET, spel_patch_code, PATCH_CODE_SIZE);
+	put_u32(data, PATCH_CODE_OFFSET + PATCH_CODE_SIZE, width);
+	put_u32(data, PATCH_CODE_OFFSET + PATCH_CODE_SIZE + 4, height);
 
 	for (i = 0; i < sizeof(code_patches) / sizeof(code_patches[0]); i++) {
 		char *current = data + code_patches[i].offset;
@@ -645,21 +693,24 @@ static BOOL apply_patch(char *data, int width, int height)
 			continue; /* already patched */
 
 		if (!same_bytes(current, code_patches[i].original, size))
-			return FAIL("%s bytes did not match expected original pattern at 0x%lX. This may be the wrong spel.dat version",
+			return FAIL("%s bytes did not match expected original pattern at 0x%lX. This may be the wrong " GAME_FILE " version",
 				code_patches[i].label, code_patches[i].offset);
 
 		memcpy(current, code_patches[i].replacement, size);
 	}
 
-	/* The horizontal view for this screen shape: with the vertical view fixed at
-	   +-0.75, +-0.75*width/height gives square pixels, and exactly +-1 at 4:3. */
-	if (!same_bytes(data + 0x0C0E8A, clip_x_opcode, 3))
-		return FAIL("horizontal clip x bytes did not match expected original pattern at 0xC0E8A. This may be the wrong spel.dat version");
-	if (!same_bytes(data + 0x0C0E96, clip_width_opcode, 3))
-		return FAIL("horizontal clip width bytes did not match expected original pattern at 0xC0E96. This may be the wrong spel.dat version");
-
-	put_u32(data, 0x0C0E8A + 3, float_bits(3 * width, 4 * height) | 0x80000000);
-	put_u32(data, 0x0C0E96 + 3, float_bits(3 * width, 2 * height));
+	/* Older versions of this patch changed the values in these instructions, so
+	   only the opcodes are checked. */
+	if (!same_bytes(data + 0x0C0E8A, horizontal_view_call, 7)) {
+		if (!same_bytes(data + 0x0C0E8A, view_x_opcode, 3))
+			return FAIL("horizontal view bytes did not match expected original pattern at 0xC0E8A. This may be the wrong " GAME_FILE " version");
+		memcpy(data + 0x0C0E8A, horizontal_view_call, 7);
+	}
+	if (!same_bytes(data + 0x0C0E96, nops, 7)) {
+		if (!same_bytes(data + 0x0C0E96, view_width_opcode, 3))
+			return FAIL("horizontal view bytes did not match expected original pattern at 0xC0E96. This may be the wrong " GAME_FILE " version");
+		memcpy(data + 0x0C0E96, nops, 7);
+	}
 
 	return TRUE;
 }
@@ -694,6 +745,33 @@ static BOOL patch_in_place(int width, int height)
 	if (data[0] != 'M' || data[1] != 'Z') {
 		FAIL(GAME_FILE " does not look like a Windows PE executable");
 		return unchanged();
+	}
+
+	if (!patch_code_fits(data, size)) {
+		/* An older version of this patch has other code in that place, so start from
+		   the file it was made from. */
+		static char backup_dir[PATH_SIZE];
+		static char source_path[PATH_SIZE];
+		DWORD source_size;
+		char *source;
+
+		join_path(backup_dir, game_dir, BACKUP_DIR);
+		if (!find_file(backup_dir, GAME_FILE, source_path)) {
+			FAIL(GAME_FILE " has unknown code at 0x%X and " BACKUP_DIR " holds no original to start from", PATCH_CODE_OFFSET);
+			return unchanged();
+		}
+		source = read_file(source_path, &source_size);
+		if (source == NULL) {
+			FAIL("could not read %s: %s", source_path, system_error());
+			return unchanged();
+		}
+		if (!patch_code_fits(source, source_size)) {
+			FAIL(GAME_FILE " and the copy in " BACKUP_DIR " both have unknown code at 0x%X", PATCH_CODE_OFFSET);
+			return unchanged();
+		}
+		HeapFree(GetProcessHeap(), 0, data);
+		data = source;
+		size = source_size;
 	}
 
 	if (!apply_patch(data, width, height))
@@ -783,46 +861,6 @@ static BOOL patch_menu(void)
 	return TRUE;
 }
 
-/* How far HUD elements attached to a screen edge move, in the game's HUD units.
-   The game places HUD x at x*0.99/320-1 in view space, and the view reaches
-   +-0.75*width/height, so the edges move by (0.75*width/height-1)*320/0.99,
-   which is 0 at 4:3. */
-static int hud_shift(int width, int height)
-{
-	int numerator = (3 * width - 4 * height) * 8000;
-	int denominator = 99 * height;
-
-	if (numerator < 0)
-		return (numerator - denominator / 2) / denominator;
-	return (numerator + denominator / 2) / denominator;
-}
-
-static BOOL has_prefix(const char *text, const char *prefix)
-{
-	while (*prefix) {
-		char a = *text++, b = *prefix++;
-
-		if (a >= 'a' && a <= 'z')
-			a = (char)(a - 32);
-		if (a != b)
-			return FALSE;
-	}
-	return TRUE;
-}
-
-/* Which screen edge a HUD element is attached to: -1 left, 1 right, 0 for elements
-   that stay centered or that the game places itself. */
-static int hud_edge(const char *section, const char *parent)
-{
-	if (lstrcmpiA(parent, "Speedometer") == 0 || lstrcmpiA(section, "STRING_RACE_TIME_VALUE") == 0 ||
-			lstrcmpiA(section, "STRING_CUR_LAP") == 0 || lstrcmpiA(section, "STRING_CUR_POS") == 0)
-		return 1;
-	if (lstrcmpiA(parent, "Communicator") == 0 || has_prefix(section, "OVL_PORTRAITS_") ||
-			has_prefix(section, "PLAYER_"))
-		return -1;
-	return 0;
-}
-
 /* Reads one line of an overlay file: its section name if it starts a section,
    otherwise its key in lower case and where its value starts. */
 static void ini_line(const char *line, int size, char *section, char *key, int *value_start)
@@ -870,55 +908,6 @@ static void ini_line(const char *line, int size, char *section, char *key, int *
 	*value_start = i;
 }
 
-/* Adds shift to the number at the start of value, which may have up to three
-   decimals. Writes the new number and returns how long the old one was, or 0. */
-static int shift_decimal(const char *value, int size, int shift, char *text)
-{
-	int i = 0, whole = 0, milli, start, unit = 100;
-	BOOL negative = size > 0 && value[0] == '-';
-
-	if (negative)
-		i++;
-	start = i;
-	while (i < size && value[i] >= '0' && value[i] <= '9' && whole <= 1000000)
-		whole = whole * 10 + (value[i++] - '0');
-	if (i == start || whole > 1000000)
-		return 0;
-
-	milli = whole * 1000;
-	if (i < size && value[i] == '.') {
-		i++;
-		for (; i < size && value[i] >= '0' && value[i] <= '9'; i++) {
-			if (unit == 0)
-				return 0;
-			milli += (value[i] - '0') * unit;
-			unit /= 10;
-		}
-	}
-	if (negative)
-		milli = -milli;
-	milli += shift * 1000;
-
-	if (milli < 0) {
-		*text++ = '-';
-		milli = -milli;
-	}
-	text += wsprintfA(text, "%d", milli / 1000);
-	if (milli % 1000 != 0) {
-		int fraction = milli % 1000;
-
-		*text++ = '.';
-		*text++ = (char)('0' + fraction / 100);
-		if (fraction % 100 != 0) {
-			*text++ = (char)('0' + fraction / 10 % 10);
-			if (fraction % 10 != 0)
-				*text++ = (char)('0' + fraction % 10);
-		}
-	}
-	*text = 0;
-	return i;
-}
-
 static int line_size(const char *data, DWORD left)
 {
 	DWORD i = 0;
@@ -930,83 +919,9 @@ static int line_size(const char *data, DWORD left)
 
 /* Fills in the Parent of the section a Position line belongs to: it can come
    before or after that line, so look through the whole section. */
-static void section_parent(const char *start, const char *end, char *parent)
-{
-	static char section[100], key[20];
-	const char *line = start;
-	int value_start;
-
-	parent[0] = 0;
-	while (line < end) {
-		int size = line_size(line, (DWORD)(end - line));
-
-		ini_line(line, size, section, key, &value_start);
-		if (line != start && section[0] != 0)
-			return;
-		if (lstrcmpA(key, "parent") == 0) {
-			int length = 0;
-
-			while (value_start + length < size && length < 99 && !is_space(line[value_start + length]) &&
-					line[value_start + length] != ';') {
-				parent[length] = line[value_start + length];
-				length++;
-			}
-			parent[length] = 0;
-		}
-		line += size;
-	}
-}
-
-/* Writes an original overlay file with every element that is attached to a screen
-   edge moved to that edge for the chosen resolution. The rest stays as it is, so
-   the HUD keeps its original size. The result is allocated here. */
-static char *transform_overlay(const char *data, DWORD size, int shift, DWORD *result_size)
-{
-	static char section[100], current[100], key[20], parent[100], number[32];
-	const char *line = data;
-	const char *end = data + size;
-	char *result = HeapAlloc(GetProcessHeap(), 0, size * 2 + 16);
-	char *to = result;
-
-	current[0] = parent[0] = 0;
-	if (result == NULL)
-		return NULL;
-
-	while (line < end) {
-		int length = line_size(line, (DWORD)(end - line));
-		int value_start, old_size = 0;
-
-		ini_line(line, length, section, key, &value_start);
-		if (section[0] != 0) {
-			lstrcpyA(current, section);
-			section_parent(line, end, parent);
-		} else if (lstrcmpA(key, "position") == 0) {
-			int edge = hud_edge(current, parent);
-
-			if (edge != 0)
-				old_size = shift_decimal(line + value_start, length - value_start, edge * shift, number);
-		}
-
-		if (old_size > 0) {
-			memcpy(to, line, value_start);
-			to += value_start;
-			memcpy(to, number, lstrlenA(number));
-			to += lstrlenA(number);
-			memcpy(to, line + value_start + old_size, length - value_start - old_size);
-			to += length - value_start - old_size;
-		} else {
-			memcpy(to, line, length);
-			to += length;
-		}
-		line += length;
-	}
-
-	*result_size = (DWORD)(to - result);
-	return result;
-}
-
-/* Recognizes the game's own HUD layout. Moving a file that an earlier patcher or
-   a hand tuned HUD already changed would give a wrong result. */
+/* Recognizes the game's own HUD layout. The game moves it to the screen edges by
+   itself, so a file that an earlier patcher or a hand tuned HUD already moved would
+   end up in the wrong place. */
 static BOOL is_original_overlay(const char *data, DWORD size)
 {
 	static char section[100], current[100], key[20];
@@ -1080,36 +995,27 @@ static char *original_overlay(const char *name, DWORD *size)
 	return NULL;
 }
 
-/* Writes the HUD overlay files for the chosen resolution, made from the game's own
-   files, and moves the files they replace to the backup folder. overlay7.ini comes
-   with the "Schaduw" extra car update, which would overwrite it again, so it is
-   only written when that update is already installed. */
-static BOOL install_overlays(int width, int height)
+/* Puts back the game's own overlay files where an older version of this patch
+   changed them, and moves the changed files to the backup folder. */
+static BOOL restore_overlays(void)
 {
 	static char target[PATH_SIZE];
 	static char backup_path[PATH_SIZE];
-	int shift = hud_shift(width, height);
 	unsigned int i;
 
 	for (i = 0; i < sizeof(overlay_names) / sizeof(overlay_names[0]); i++) {
 		const char *name = overlay_names[i];
 		BOOL exists = find_file(game_dir, name, target);
-		char *original, *data;
-		DWORD original_size, size;
+		char *data;
+		DWORD size;
 
-		if (!exists && lstrcmpA(name, EXTRA_CAR_OVERLAY) == 0) {
-			SAY("Skipped %s: the \"Schaduw\" extra car update is not installed.\r\n", name);
-			say("  Install that update first, then run the patcher again.\r\n");
+		/* Only the "Schaduw" extra car update brings this one. */
+		if (!exists && lstrcmpA(name, EXTRA_CAR_OVERLAY) == 0)
 			continue;
-		}
 
-		original = original_overlay(name, &original_size);
-		if (original == NULL)
-			return FALSE;
-		data = transform_overlay(original, original_size, shift, &size);
-		HeapFree(GetProcessHeap(), 0, original);
+		data = original_overlay(name, &size);
 		if (data == NULL)
-			return FAIL("not enough memory for %s", name);
+			return FALSE;
 
 		backup_path[0] = 0;
 		if (exists) {
@@ -1123,7 +1029,6 @@ static BOOL install_overlays(int width, int height)
 			same = current_size == size && same_bytes(current, data, size);
 			HeapFree(GetProcessHeap(), 0, current);
 			if (same) {
-				SAY("%s is already up to date.\r\n", name);
 				HeapFree(GetProcessHeap(), 0, data);
 				continue;
 			}
@@ -1132,21 +1037,21 @@ static BOOL install_overlays(int width, int height)
 				return FALSE;
 
 			if (!MoveFileA(target, backup_path))
-				return FAIL("could not move original %s to %s: %s", name, backup_path, system_error());
+				return FAIL("could not move %s to %s: %s", name, backup_path, system_error());
 		}
 
 		if (!write_verified(target, data, size)) {
-			/* Try to restore the original if writing fails. */
+			/* Try to put the file back if writing fails. */
 			if (backup_path[0] != 0) {
 				DeleteFileA(target);
 				if (!MoveFileA(backup_path, target))
-					return FAIL("could not write %s: %s. The original is still in %s", name, earlier(), backup_path);
+					return FAIL("could not write %s: %s. The earlier file is still in %s", name, earlier(), backup_path);
 			}
 			return FAIL("could not write %s: %s", name, earlier());
 		}
 
 		HeapFree(GetProcessHeap(), 0, data);
-		SAY("Installed %s\r\n", name);
+		SAY("Restored the original %s\r\n", name);
 	}
 
 	return TRUE;
@@ -1254,13 +1159,16 @@ static BOOL run(void)
 	}
 
 	say("\r\n");
-	SAY("Created patched " GAME_FILE " for %dx%d.\r\n", width, height);
+	if (width == 0)
+		say("Created patched " GAME_FILE ". The game now follows the resolution of your display.\r\n");
+	else
+		SAY("Created patched " GAME_FILE ", fixed at %dx%d.\r\n", width, height);
 	say("The texture memory crash fix, the transparency fix for current graphics\r\n");
 	say("drivers and the CD check removal are included.\r\n\r\n");
 
-	if (!install_overlays(width, height)) {
-		SAY("\r\nCopying the HUD files failed: %s\r\n", error);
-		say(GAME_FILE " is patched, but not every HUD file was installed.\r\n");
+	if (!restore_overlays()) {
+		SAY("\r\nRestoring the HUD files failed: %s\r\n", error);
+		say(GAME_FILE " is patched, but the HUD will be misplaced.\r\n");
 		say("Fix the problem and run the patcher again.\r\n");
 		return FALSE;
 	}

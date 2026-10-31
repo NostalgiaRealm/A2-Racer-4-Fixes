@@ -3,7 +3,7 @@
 This folder contains the source code for the patcher, `A2Racer4Fixes`. The 64-bit Windows and both Linux versions are written in Go. Build the whole folder (`.`), not a single `.go` file:
 - `admin_windows.go` and `admin_other.go` hold the platform-specific parts;
 - `rsrc_windows_amd64.syso` adds the Windows manifest that asks for administrator rights;
-- `alpha_key_patch.asm` is the source of the transparency fix code, whose bytes are in both patchers. Rebuild it with `nasm -f bin -o alpha_key_patch.bin alpha_key_patch.asm`;
+- `spel_patch.asm` is the source of the code added to `spel.dat`, whose bytes are in both patchers. Rebuild it with `nasm -f bin -o spel_patch.bin spel_patch.asm`;
 - `win32/` holds the separate C version for 32-bit Windows, which covers the systems current Go cannot target.
 
 ## Build on Windows
@@ -62,18 +62,19 @@ x86_64-w64-mingw32-windres -O coff -i A2Racer4Fixes.rc -o rsrc_windows_amd64.sys
 
 Run `A2Racer4Fixes` from anywhere. It asks for:
 - the A2 Racer 4 game folder, the one with `spel.dat`. Press Enter for the suggested folder: the patcher's own folder when `spel.dat` is there, otherwise the current folder;
-- a resolution such as:
+- a resolution: press Enter to follow the display, or type a fixed one such as:
 
 ```text
 2560x1440
 ```
 
-The patcher creates a `4x3_backup` folder in the game folder, moves the original `spel.dat` into it, and writes a new patched `spel.dat`. It then makes the overlay `.ini` files for that resolution from the game's own files, the same way:
+The patcher creates a `4x3_backup` folder in the game folder, moves the original `spel.dat` into it, and writes a new patched `spel.dat`. A `spel.dat` from an older version with other added code is rebuilt from the copy in `4x3_backup`.
+
+The resolution is not in the patched file unless you fix one: the added code reads it when the game starts, see `spel_patch.asm`. Overlay `.ini` files stay as the game ships them. Where an older version changed them, the patcher puts them back:
 - the original comes from `4x3_backup` after an earlier run, otherwise from the game folder, and a file an older HUD fix changed is refused;
-- only `Position` x of elements attached to a screen edge changes (`hudEdge` and `hudShift`);
 - each replaced file is moved to `4x3_backup`, and an existing backup is never overwritten;
-- files that are already up to date are skipped;
-- `overlay7.ini` is only written when the "Schaduw" extra car update has installed one.
+- files that are already the original are skipped;
+- a missing `overlay7.ini` is fine, since only the "Schaduw" extra car update brings it.
 
 File names are matched case-insensitively, and quoted, escaped and `~` paths are accepted. The 32-bit Windows version uses the non-Unicode file functions, so a game folder with characters outside the system's code page gives an error there.
 

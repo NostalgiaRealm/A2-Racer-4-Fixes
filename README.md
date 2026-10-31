@@ -2,16 +2,13 @@
 
 Fixes for the PC version of **A2 Racer 4**:
 
-- the game runs correctly at the resolution you choose, whatever its shape: 16:9, 16:10, 21:9, 32:9, 4:3 or 5:4;
+- the game runs at the resolution of your display, whatever its shape: 16:9, 16:10, 21:9, 32:9, 4:3 or 5:4. It finds that out by itself each time it starts;
 - the crash at race start on modern graphics cards is gone;
 - the black edges around objects on current graphics drivers are gone;
-- the game no longer needs its CD in the drive.
+- the game no longer needs its CD in the drive;
+- surfaces no longer flicker where they meet, from Windows Vista on.
 
-They consist of three parts:
-
-1. a patched `spel.dat` executable module that makes the 3D game render correctly at your resolution without stretching, and that holds the other game fixes, with a small patch to `menu.exe` for the CD check;
-2. an automatic patcher called `A2Racer4Fixes`, for 64-bit and 32-bit Windows and Linux, that patches `spel.dat` and installs the overlay files in the game folder you choose;
-3. `overlay*.ini` files that the patcher makes from the game's own files, with the HUD moved to the edges of your screen.
+They consist of a patched `spel.dat` executable module that holds these fixes, a small patch to `menu.exe` for the CD check, and an automatic patcher called `A2Racer4Fixes`, for 64-bit and 32-bit Windows and Linux, that applies them to the game folder you choose. You run the patcher once.
 
 The game uses `spel.dat` as the executable module for the DirectDraw/Direct3D racing portion of the game, even though the file extension is `.dat`.
 
@@ -39,12 +36,19 @@ The details are in [`README_technical_spel.dat.md`](README_technical_spel.dat.md
 
 The game no longer asks for its CD. Install it from the disc once, and after patching you can play with no disc, drive or disc image. The patcher changes `menu.exe` as well as `spel.dat` for this, and keeps the original in the `4x3_backup` folder. The intro video plays from the game folder.
 
-## Recommended setup
+## No more flickering (v1.3.0)
 
-The patched `spel.dat` fixes the 3D rendering and the crash. Since v1.0.5 the automatic patcher, `A2Racer4Fixes.exe` (or the 32-bit or Linux version), creates it and installs the patched overlay `.ini` files in one go.
-The overlay `.ini` files put the HUD at the edges of your screen.
+Where two surfaces lie close together, the game used to flicker. Its 16-bit Z-buffer is too coarse for how far it can see. From Windows Vista on the patch asks for 24 bits, or 32, and falls back to 16 if the driver has neither. This used to need dgVoodoo. Windows XP and older keep 16 bits, because the graphics cards of that time may not handle more with a 16-bit screen.
 
-Using only one part is not recommended.
+## Automatic resolution (v1.3.0)
+
+The game now reads the resolution of your display every time it starts, and sets up the 3D view and the HUD for it. Change your display or its resolution and the next race just fits, without running the patcher again.
+
+Nothing is written for this: it all happens in memory while the game runs, so no files change and no administrator rights are needed. The `overlay*.ini` files stay as the game ships them.
+
+If you want something other than your display's resolution, or the game can't use it, type a fixed resolution when the patcher asks. Run the patcher again and press Enter to go back to automatic.
+
+With more than one display, the game uses your main one. Windows display scaling above 100% needs no settings: the race uses the display's real resolution.
 
 ## Files
 
@@ -75,9 +79,9 @@ chmod +x A2Racer4Fixes_linux_32bit
 Run it from anywhere and enter:
 
 1. the game folder, the folder that contains `spel.dat`. Press Enter if the patcher is already in that folder;
-2. your resolution, for example `2560x1440`.
+2. nothing for the resolution: press Enter and the game follows your display. To fix it instead, type one such as `2560x1440`.
 
-It writes the patched `spel.dat` (including the crash fix) and copies the patched overlay `.ini` files into that folder. Every file it replaces is moved to a `4x3_backup` folder in the game folder; earlier backups are never overwritten. It refuses to patch an unknown `spel.dat` version.
+It writes the patched `spel.dat` and `menu.exe` into that folder, and puts back the game's own overlay `.ini` files if an older version of this patch changed them. Every file it replaces is moved to a `4x3_backup` folder in the game folder; earlier backups are never overwritten. It refuses to patch an unknown `spel.dat` version.
 
 On Windows the patcher needs administrator rights, because the game is normally installed in `C:\Program Files (x86)`, or `C:\Program Files` on 32-bit Windows. Windows asks for them when you start it; click Yes (Allow on Vista). Windows XP does not ask: use an administrator account, or right-click the patcher and choose Run as. Without administrator rights it stops and changes nothing. Windows 95, 98 and Me have no such rights.
 
@@ -95,32 +99,29 @@ Default Wine prefix: ~/.wine/drive_c/Program Files (x86)/Davilex/A2 Racer 4
 
 You can type or paste the path, with or without quotes. On Linux, `~` and escaped spaces work too, and most terminals let you drag the folder in.
 
-`overlay7.ini` is only installed when the "Schaduw" extra car update is present, because that update brings its own copy. Install the update first, then run the patcher.
+The "Schaduw" extra car update and its `overlay7.ini` work in either order.
 
 `A2Racer4Fixes.exe` needs Windows 10 or newer, so on older 64-bit Windows use the 32-bit version. On Windows XP that one needs Service Pack 3. Service Pack 2 is untested, and Microsoft documents that programs with a manifest like this one can make an unpatched SP2 restart, so update to SP3 first, or install hotfixes KB921337 and KB943232. It doesn't support game folders with characters outside your system's code page: it gives an error and changes nothing.
 
-The game can only use a resolution your graphics driver offers, so on an old PC choose a mode that is listed in your display settings.
+The game can only use a resolution your graphics driver offers at 16-bit color. If it stops with "could not set display mode", type a fixed resolution in the patcher that is listed in your display settings.
 
 The 32-bit Windows version needs a 486 or newer. The 32-bit Linux version needs a processor with MMX but not SSE2, so it also runs on a Pentium III or Athlon XP, and Linux 3.2 or newer.
 
-### `A2Racer4_DashboardFix`
-
-Ready-made overlay files for 16:9 screens only, for installing by hand. `overlay7.ini` is for the "Schaduw" extra car update. The patcher makes these files itself for any resolution, so normally you don't need the zip. Back up the originals first, then extract the files into the same folder.
-
 ## What the `spel.dat` patch changes
 
-The original game is built around 4:3 display modes. Forcing another shape makes the image stretched or zoomed. The patch does the following, all calculated from your resolution. The details and the code behind them are in [`README_technical_spel.dat.md`](README_technical_spel.dat.md).
+The original game is built around 4:3 display modes. Forcing another shape makes the image stretched or zoomed. The patch does the following, all calculated from your resolution when the game starts. The details and the code behind them are in [`README_technical_spel.dat.md`](README_technical_spel.dat.md).
 
-1. **Display mode:** the game's mode table is set to your resolution.
+1. **Display mode:** the game's mode table is set to the resolution of your display.
 2. **3D view:** the vertical view stays as it is at 4:3, and the horizontal view is set to `0.75 x width / height`. Pixels stay square at every shape. A wider screen shows more on the sides, and a narrower one such as 5:4 shows slightly less.
 3. **HUD proportions:** the game squashes its HUD vertically on anything but 4:3. The patch makes it use the 4:3 shape there too, so the HUD keeps its original proportions and its size relative to the height of the screen.
 4. **Texture memory crash fix:** not related to the screen shape, see [Crash fix for modern graphics cards](#crash-fix-for-modern-graphics-cards-v104).
 5. **Transparency fix:** see [Black edges around objects](#black-edges-around-objects-v120).
 6. **CD check removal:** see [No CD needed](#no-cd-needed-v120).
+7. **Deeper Z-buffer:** see [No more flickering](#no-more-flickering-v130).
 
-## What happens to the overlay `.ini` files
+## How the HUD moves
 
-The overlay files describe the HUD on a 640x480 canvas. The patcher starts from the game's own files, from `4x3_backup` after an earlier run, so results never build on an earlier patch. It only moves elements attached to a screen edge, by the same amount everywhere:
+The overlay files describe the HUD on a 640x480 canvas. While the game reads them, it moves elements attached to a screen edge, by the same amount everywhere:
 
 ```text
 shift = (0.75 x width / height - 1) x 320 / 0.99, rounded
@@ -129,7 +130,7 @@ shift = (0.75 x width / height - 1) x 320 / 0.99, rounded
 | Shape | Example | Shift |
 |---|---|---|
 | 5:4 | 1280x1024 | -20 |
-| 4:3 | 1600x1200 | 0, the files stay as they are |
+| 4:3 | 1600x1200 | 0 |
 | 16:10 | 1680x1050 | +65 |
 | 16:9 | 2560x1440 | +108 |
 | 21:9 | 3440x1440 | +256 |
@@ -139,22 +140,21 @@ shift = (0.75 x width / height - 1) x 320 / 0.99, rounded
 - **To the left:** the communicator and everything on it, the character portraits and the player portraits.
 - **Unchanged:** everything else, including all `Scale` values and all vertical positions. Elements in the middle stay in the middle.
 
-Because older versions of this fix tuned the files by hand, the patcher refuses to build on such a file: it asks you to restore the original from the game CD if it can't find one in `4x3_backup`.
+This needs the game's own files, because a changed file would move twice. The patcher puts them back from `4x3_backup`. If it can't find an original for a file that older versions of this fix tuned by hand, it asks you to restore that file from the game CD.
 
 ## Installation
 
-1. If you use the "Schaduw" extra car update, install it first.
+1. Run the patcher (on Windows, click Yes when it asks for administrator rights), then enter the game folder and press Enter at the resolution question. It writes the patched `spel.dat` and `menu.exe`, and moves the originals to the `4x3_backup` folder in the game folder.
 
-2. Run the patcher (on Windows, click Yes when it asks for administrator rights), then enter the game folder and your resolution. It writes the patched `spel.dat`, `menu.exe` and overlay `.ini` files, and moves the originals to the `4x3_backup` folder in the game folder.
+2. Start the racing part of the game normally.
 
-3. Start the racing part of the game normally.
-
-To install by hand instead: back up `spel.dat` and the overlay `.ini` files, patch `spel.dat` with the steps in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#manual-patching-on-windows), and copy the files from `A2Racer4_DashboardFix.zip` into the game folder.
+To install by hand instead: back up `spel.dat` and `menu.exe`, and follow the steps in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#manual-patching-on-windows).
 
 ## Notes
 
 - The 3D view and HUD layout are calculated from the game's own code. Since v1.1.0 they no longer use hand-tuned values.
 - v1.1.0 was checked in-game by the author. The files it writes were compared under Wine at shapes from 5:4 to 32:9.
+- v1.3.0 was checked in-game by the author on a Radeon 760M under Windows 10: following the display through several resolutions, the race and menu at 150% display scaling, and no more flickering. Under Wine with software rendering, one patched game folder also ran at 4:3, 5:4, 16:9 and 16:10 by changing only the desktop size. At 16:10 the HUD was within a few pixels of v1.2.0.
 - The 32-bit Windows version is a small C program since v1.1.0, tested under Wine in Windows 98, XP, 7 and 10 mode. v1.1.1 ran fine on real Windows 7 32-bit with a Mobility Radeon HD 5750. Earlier versions of the same code ran on Windows 98 SE in a VM.
 - The 32-bit Linux version was tested in earlier releases on a 32-bit Linux 3.18 kernel in QEMU, on emulated processors without SSE2.
 - The v1.2.0 transparency fix was checked in-game by the author on a Radeon 760M under Windows 10. The fix and the CD removal also ran through a race start under Wine with software rendering. Both patchers wrote identical files.
