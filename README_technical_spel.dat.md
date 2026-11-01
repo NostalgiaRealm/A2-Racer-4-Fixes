@@ -55,6 +55,7 @@ file offset 0x1B3798 -> VA 0x005B3798
 | 10 | 32-bit display mode from Windows Vista on, not related to the screen shape |
 | 11 | A car that hangs with an axle in the air, or tipped over, goes back on the road |
 | 12 | Contacts in the physics engine end when they leave their triangle at any frame rate, and when an object is moved; the reset cleans up after itself |
+| 13 | Police, the Supercop, the chase camera, car lighting, skid marks, smoke, mud and water, pickups, animated objects, debris, the speed camera flash and the turbo tank no longer depend on the frame rate |
 
 ## Patch part 1: display-mode table
 
@@ -393,7 +394,7 @@ Above 300 FPS the step is below 1 and rounds away. The car then stays where it i
 
 `frame_limit` replaces the timer call at the start of every frame (`0x0044CB9E`) and waits until 1/240 of a second has passed. The game doesn't import `Sleep`, so it waits actively, as the unlimited game did anyway. A display at a lower refresh rate keeps the frame rate lower through vertical sync.
 
-Nothing that was checked needs it any more. A sweep of the code for time steps that go through `__ftol` found one whole number step that breaks in this range: the fade of a trailer in `FUN_00430EA0` is `(int)(alpha + dt × 128)` and stopped above 128 FPS, so `trailer_fade` keeps what is rounded off, like the pedals. The other steps are frame counts of the form `(int)(seconds / dt)`, which are fine at any rate, and whole milliseconds per frame in `FUN_00469C60`, which round to nothing at 1000 FPS. The limit keeps the game far from that, and inside the range the physics were measured in. `FUN_0043C890`, the fuel station camera, writes `(int)(2 / dt)` steps into an array for 100, but nothing calls it. Ipion interpolates positions to the current time, so frames between physics steps do show movement.
+Nothing that was checked needs it any more. A sweep of the code for time steps that go through `__ftol` found one whole number step that breaks in this range: the fade of a trailer in `FUN_00430EA0` is `(int)(alpha + dt × 128)` and stopped above 128 FPS, so `trailer_fade` keeps what is rounded off, like the pedals. The other steps are frame counts of the form `(int)(seconds / dt)`, which are fine at any rate, and whole milliseconds per frame in `FUN_00469C60`, which round to nothing at 1000 FPS. The limit keeps the game far from that, and inside the range the physics were measured in. [Part 13](#patch-part-13-what-still-counted-frames) found more that this sweep missed. `FUN_0043C890`, the fuel station camera, writes `(int)(2 / dt)` steps into an array for 100, but nothing calls it. Ipion interpolates positions to the current time, so frames between physics steps do show movement.
 
 ### Measurements
 
@@ -432,7 +433,7 @@ A bot driving the player's car along the path of a racer for 110 seconds, with b
 - What lifted cars after these fixes is in [Patch part 12](#patch-part-12-contacts-that-outlive-their-triangle). At the time of this part it had not been reproduced by itself. The player's wheels run inside the physics steps, so they don't depend on the frame rate, and a clean clock showed no lifting by itself at any frame rate. What was seen: the frozen and slowed world at a long uptime, and the 8 stops at high frame rates. Nose-up traffic as a ramp under the player's car is inferred, from what it would take for the wheels to lose the road.
 - The reset can drop a car on top of another car: Enter at the start of a race put the player's car on the roof of a racer, nose up at 0.24 and wheels spinning, where it rode for 35 seconds. That isn't changed, and it looks a lot like a lifted car. `FUN_0040E5A0` puts the car 20 units above a free spot of the road, but not all vehicles count for that check.
 - `FUN_004FC2D0` (the body's counter torque) only runs when braking, so its last value stays until the next brake. It's small: 1600 at full brake, which tilts the car about 1 degree, so it's left as it is.
-- Trailers weren't run. Some objects on the road still throw a car that hits them at speed, like the one near (-15020, 7570), at any frame rate.
+- Trailers weren't run, and [part 13](#patch-part-13-what-still-counted-frames) found that nothing can reach that code. Some objects on the road still throw a car that hits them at speed, like the one near (-15020, 7570), at any frame rate.
 
 ## Patch part 10: 32-bit display mode
 
@@ -640,18 +641,129 @@ Tests with a test build that can place a car, under Wine:
 
 ### What this doesn't establish
 
-- The numbers are from Wine with software rendering, a bot and test placements. The stuck car itself ran under Wine at 165 FPS. This part was released before anyone played it on real hardware.
+- The numbers are from Wine with software rendering, a bot and test placements. The stuck car itself ran under Wine at 165 FPS. This part was released before anyone played it on real hardware. The author then tested the v1.5.2 test build, which includes it, in-game.
 - How the green car came to touch that triangle isn't known: the game was stopped after it happened. That triangle is about 400 units from the road, and the moves before the pause weren't logged.
 - The frame rates of the PCs of the time aren't known, so why this went unnoticed then is inferred.
 - A frontal hit still lifts the nose, and a car can land on its roof or on another car. These were all seen in the races, with contacts that really touch.
 - A car with both axles on something, like pressed against a wall, still doesn't count as hung. Enter works for those, and racers reverse out by themselves.
 - `hung_check` also runs after the finish and during an arrest, so a car lying on its roof by then gets put back as well.
 
+## Patch part 13: what still counted frames
+
+Parts 9 and 12 took the frame rate out of the car physics. For this part the whole of `spel.dat` was read again for anything else that depends on it, in two ways:
+
+- Every reader of the time step, every `__ftol`, every use of the tick clock and of `rand`, every value that updates itself without a time step and every object handler. Each finding was then checked by a second, independent read of the code.
+- The game ran at exact limits of 30, 60, 120 and 240 FPS, with every value in its memory compared, to catch what reading misses.
+
+### What was already fine
+
+World time, steering, gas and brake ramps, racer and traffic speed, gears, wheel forces, laps, the race clock, money, game over and arrest timers, engine and skid sounds, the speedometer and the fixed-step physics. Steering from -100 to +100 took 3.01 s, gas from 0 to 100 1.33 s and the brake from 0 to 100 1.8 s at all four limits, and world time matched the clock at all of them.
+
+Positions don't judder above 66 FPS either: the world interpolates them between physics steps. The trailer code can't be reached: nothing calls or points at `FUN_00431320`, so `trailer_push` and `trailer_fade` from part 9 never run. They do no harm and stayed in.
+
+### What wasn't
+
+| What | Where | What the game does | Result |
+|---|---|---|---|
+| Police brake | `FUN_00407D90`, `FUN_00407ED0`, `FUN_00408030`, `FUN_00408E10` | `FUN_004037A0` sets the brake to 0, then these add `dt × 400` (or 200) in the same frame, so the brake is one frame's amount | 13.3 at 30 FPS, 2.4 at 165: a chasing car hardly slows down, and runs into or past its target. On the six stages with police |
+| Supercop reverse | `FUN_0041F5E0` at `0x0041F7F9`, `FUN_004200E0` at `0x004204B3` | `pedal = dt × 800`, not added up | 26.7 at 30 FPS, 4.85 at 165: from about 120 FPS it gives up on getting free after 1 second. Stages 1, 3 and 4 |
+| Supercop patrol | `FUN_004060D0` | Gas ±1 per frame | From full gas to none takes 3.3 s at 30 FPS, 0.6 s at 165 |
+| Chase camera | `FUN_004B1380` at `0x004B195F`, `0x004B1974`, `0x004B198D` | Moves a fixed part of the way per frame, with no time step | Vertical time constant 0.32 s at 30 FPS, 0.06 s at 165: it sits closer at speed and passes on every bump |
+| Car lighting | `FUN_004A8200` | `c = (int)(c + (road - c) × dt × k)` per color channel | A step below 1 does nothing going up and loses a whole level going down. A car stays up to 165 levels too dark at 165 FPS when standing, 41 when driving |
+| Skid mark length | `FUN_00444D20` | One section per frame, up to 48 | 1.6 s at 30 FPS, 0.29 s at 165, and the rest of a long slide leaves nothing |
+| Skid mark fade | `FUN_00444F80` | At least 1 alpha per frame | Gone in 1.8 to 5 s at 30 FPS, 0.33 to 0.92 s at 165 |
+| Smoke fade | `FUN_00446730`, `FUN_0043D8F0` | At least 1 alpha per frame, while the size follows time | Visible for 4 s at 30 FPS, 0.8 s at 165, at a quarter of the size |
+| Smoke drift | `FUN_004467F0`, `FUN_0043D970` | Speed × `min(0.99, dt × 15)` per frame (20 for damage smoke): the time step the wrong way around | Moves 0.67 times the car's speed at 30 FPS, 0.067 at 165. At 15 FPS or below it keeps going and shoots far ahead of the car |
+| Mud and water | `FUN_00451DD0`, `FUN_004553B0` | 4 new particle systems per frame in a zone, with no time limit | The room for 100 systems is full in 0.83 s at 30 FPS, 0.15 s at 165, and then sparks and debris get refused too. Stages 2, 5, 7 and 8 |
+| Pickup spin | `FUN_00451380` | `PerSecToPerFrame(600)` in its script runs while loading, when the time step is still a default of 0.1, and gives 60 units per frame | 1.8 turns per second at 30 FPS, 9.7 at 165 |
+| Pickup shrink | `bonus.dso` `DoDefault_OnFadeout` | Size × 0.6 per frame | Takes 0.2 s at 30 FPS, 0.036 s at 165 |
+| Animated objects | `FUN_00469C60` | A step waits a frame longer than its time and loses what it went over | A 50 ms frame shows for 100 ms at 30 FPS and 61 ms at 165 |
+| Debris spin | `FUN_0045AF90`, `FUN_0045C660`, `FUN_0045CF30`, `FUN_00461150`, `FUN_00462300` | Adds a random 0.1 radians on average per frame, on each axis | 3 rad/s at 30 FPS, 16.5 at 165 |
+| Letters | `FUN_0045CCA0` | Speed × 0.99 per frame | 74% left after a second at 30 FPS, 19% at 165. Stage 4 |
+| Speed camera flash | `FUN_0043B130` | Lasts one frame | 33 ms at 30 FPS, 4 ms at 240. Without vertical sync that can miss the screen altogether |
+| Portrait outline | `FUN_00493D00` | Truncates its step | Peaks at 254 at 30 FPS, 227 at 165, and stops pulsing above 212 FPS |
+| Turbo tank | `FUN_0044E970` | One unit per at least 100 ms, rounded up to a whole frame and to the tick of `GetTickCount` | Worked out for ticks of 15.6 ms: 12.4 s at 30 FPS, 10.8 s at 165 |
+
+The figures in this table come from the code. The measurements are below.
+
+### The fix
+
+Most of these get what they did at 25 FPS, at any rate above that. It's the same rate as `frame_share` in part 9. The game doesn't say what it was tuned for. Below 25 FPS a frame stands for a whole step, as it always did.
+
+| Hook | Used by | What it does |
+|---|---|---|
+| `TICK`, in `frame_limit` | `skid_section`, `skid_fade`, `tyre_smoke_fade`, `damage_smoke_fade`, `mud_spray`, `water_spray`, `pickup_fade`, `animation_step` | Adds up the time step per frame and sets a byte in frames where 0.04 s has passed. Those calls run only in such a frame, so they run 25 times per second. Below 25 FPS that's every frame |
+| `frame_share` | `camera_damping`, `patrol_step`, `pickup_spin`, `particle_spin`, `mail_drift`, `police_brake` | `min(1, dt × 25)`, from part 9 |
+| `long_step` | The Supercop's pedal, the rise of smoke, the time inside `animation_step` | `max(dt, 0.04)` |
+| `camera_damping` | | Replaces a debug print at `0x004B18D4`. Works out `k × s / (1 - k + k × s)` for each axis, with `s` from `frame_share`, and the three FMULs read those. That keeps the distance the camera lags behind a car at a steady speed the same at any rate, which `1 - (1 - k)^s` wouldn't |
+| `color_round` | Car lighting and the portrait outline | Adds a different part of a level before the conversion, each time, from a sequence with even spread. A step of 0.3 then goes through 3 times out of 10, going up or down. It needs no room per car, and it can't pass the target |
+| `police_brake` | | The brake becomes at least what a frame at 25 FPS would add: 16, or 8 at `0x00408ECC`. Where the brake does add up, it goes on doing so |
+| `smoke_drift_tyre`, `smoke_drift_damage` | | Multiply by `1 - 10 × dt` and `1 - 5 × dt`, equal at 25 FPS. Smoke then travels as far at any rate, also below 25 FPS |
+| `turbo_stamp` | | Keeps what a unit went over 100 ms, unless the key has been up. A tank takes 10 s at any rate, the time the game's own number gives |
+| `flash_done` | | The flash goes on until 0.04 s has passed |
+
+What this means for the camera: at speed it sits about as far back as at 25 FPS, and it follows softly. Anyone used to the game at a high frame rate sees a camera that lags more than they knew.
+
+### Measurements
+
+Under Wine with software rendering at 640x480, with the same bot, on stage 5 unless noted. The bot's route differs between runs, so car lighting, smoke drift and turbo are rough. Another job kept the machine busy during these runs, so the runs with a limit of 60 and 240 FPS reached the rates given.
+
+| Measure | 15 FPS | 30 FPS | About 48 FPS | About 61 FPS |
+|---|---|---|---|---|
+| Camera distance at speed 30, before | 84.2 | 77.4 | 73.7 | 72.3 |
+| The same, after | 84.0 | 78.3 | 77.9 | 78.9 |
+| Pickup spin in units per second, before | 900 | 1780 | 2615 | 3185 |
+| The same, after | 900 | 1503 | 1489 | 1542 |
+| Steps per second of an animated object, before | 6.7 | 11.7 | 15.7 | 17.4 |
+| The same, after | 6.7 | 10.2 | 10.1 | 10.1 |
+| Vertices added to a skid mark per second, before | | 61 | 81 | 115 |
+| The same, after | | 54 | 55 | 42 |
+| Seconds until a skid mark at alpha 192 is gone, before | 3.6 | 1.8 | 0.9 | 0.8 |
+| The same, after | 3.6 | 2.2 | 2.1 | 2.2 |
+| Alpha of tyre smoke of 1 to 2 s old, before | 86 | 85 | 54 | 37 |
+| The same, after | 86 | 92 | 91 | 82 |
+| How far a puff of tyre smoke moved, before | 653 | 3.4 | 1.9 | 0.5 |
+| The same, after | 5.5 | 19 | 14 | 14 |
+| Player's color, mean of red, green and blue, before | 211 | 195 | 189 | 152 |
+| The same, after | 217 | 209 | 211 | 201 |
+
+A later run on a less busy machine reached 98 FPS before and after: pickups spun at 4328 units per second before and 1503 after, and animated objects took 19.7 steps per second before and 10.2 after.
+
+The camera distance is corrected for the one frame between the game moving the car and moving the camera, which a reading between frames sees. Without that a slower frame rate looks about 6 units further away than it is.
+
+On stage 1:
+
+| Measure | Before | After |
+|---|---|---|
+| Median brake of chasing police | 13.3 at 30 FPS, 7.9 at 50, 7.2 at 55 | 16.0 at 30, 57, 60 and 59 FPS |
+| Mean reverse pedal of the Supercop | 14.2 at 55 FPS | 30.1 at 30 FPS, 31.5 at 59 |
+
+A full turbo tank with the bot holding the key, worked out from how fast it drains: 10.6 s, 11.8, 11.0 and 11.0 before, 10.0, 10.0, 10.2 and 10.0 after, at 30 and at 46 to 50 FPS. `GetTickCount` steps by 1 ms under Wine, so the larger difference in the table above doesn't show here.
+
+The new code also ran on all nine stages at 48 to 75 FPS for 60 seconds each, with no error, and it passed mud, water, pickups and speed cameras there.
+
+### Left as it is
+
+- `FUN_004AA0C0` steps the world by the mean time step of the last 50 frames. It has no lasting error, but after a sudden change in frame rate the world runs at another pace for a moment: from 165 to 60 FPS it starts at 36% and is back after 0.8 s.
+- Path objects such as planes and helicopters take their number of frames from the time step when they start, the form part 9 calls fine. A slow frame at exactly that moment makes one run too fast. Rare, and only looks.
+- The number of particles in a system falls with the time step, at 4 per dirt system at 30 FPS and 13 at 165. It's the game's own rule for slow PCs, and more isn't worse.
+- Traffic comes back with a chance of 20% per frame, but the rules for free space decide nearly everything. Below 15 FPS on the smoothed time step it doesn't come back, as the game intends.
+- The alert lamp of a Supercop goes off 14 frames after it leaves: 0.47 s at 30 FPS, 0.085 s at 165.
+- Police lights, the helicopter rotor, the game over orbit and the finish flag use whole steps, with at most a few percent of difference.
+- The 60 ms wait between damage from hits uses the real time, so below about 17 FPS sustained contact can do damage every frame.
+
+### What this doesn't establish
+
+- The numbers are from Wine with software rendering, with a bot. The author tested the build in-game before the release, without these measurements.
+- With the machine busy nothing above 98 FPS could be measured for this part. Each of these fixes follows from the time step or the tick, so nothing depends on the rate above 25 FPS, but that is inferred for 120 to 240 FPS.
+- The damage smoke wasn't seen in these runs: the numbers above are for tyre smoke, and the damage smoke takes the same route with other constants.
+- Whether 25 FPS is how the game was meant to look isn't known. It's the one rate the game's own code points at.
+
 ## All added and changed bytes
 
 The added code is built from [`A2Racer4Fixes_source/spel_patch.asm`](A2Racer4Fixes_source/spel_patch.asm). It goes in unused space at the end of `.text`, file offset `0x175500`, VA `0x00575500`, and the section's virtual size is raised so that space is certainly mapped. That space must be all zero before patching. A `spel.dat` from v1.2.0 has older code there, so the patcher starts from the copy in `4x3_backup` in that case.
 
-2264 bytes at `0x175500`:
+2728 bytes at `0x175500`:
 
 ```text
 83 7C 24 04 03 75 60 A1 26 B8 73 00 83 F8 FF 74 56 69 C0 B0 00 00 00 03
@@ -668,13 +780,13 @@ B4 B4 73 00 50 8B 08 FF 51 5C 6A 05 6A 19 A1 B4 B4 73 00 50 8B 08 FF 51
 8B 08 FF 51 58 6A 00 6A 0F A1 B4 B4 73 00 50 8B 08 FF 51 5C FF 74 24 14
 FF 74 24 14 FF 74 24 14 FF 74 24 14 8B 04 24 8B 08 FF 51 30 5A 50 52 6A
 0F A1 B4 B4 73 00 50 8B 08 FF 51 5C 58 C2 10 00 8B 44 24 04 8B 08 FF 61
-30 60 68 0D 5D 57 00 FF 15 A0 60 57 00 89 C6 85 F6 74 12 68 2D 5D 57 00
-56 FF 15 FC 60 57 00 85 C0 74 02 FF D0 8B 1D D8 5D 57 00 8B 2D DC 5D 57
+30 60 68 DF 5E 57 00 FF 15 A0 60 57 00 89 C6 85 F6 74 12 68 FF 5E 57 00
+56 FF 15 FC 60 57 00 85 C0 74 02 FF D0 8B 1D A8 5F 57 00 8B 2D AC 5F 57
 00 85 DB 75 61 81 EC 9C 00 00 00 89 E7 B9 27 00 00 00 31 C0 F3 AB 66 C7
-44 24 24 9C 00 85 F6 74 2B 68 18 5D 57 00 56 FF 15 FC 60 57 00 85 C0 74
+44 24 24 9C 00 85 F6 74 2B 68 EA 5E 57 00 56 FF 15 FC 60 57 00 85 C0 74
 1B 54 6A FF 6A 00 FF D0 85 C0 74 10 8B 5C 24 6C 8B 6C 24 70 85 DB 74 04
 85 ED 75 14 6A 00 FF 15 F4 61 57 00 89 C3 6A 01 FF 15 F4 61 57 00 89 C5
-81 C4 9C 00 00 00 BE A8 5D 57 00 B9 0C 00 00 00 AD 89 18 89 68 04 E2 F8
+81 C4 9C 00 00 00 BE 78 5F 57 00 B9 0C 00 00 00 AD 89 18 89 68 04 E2 F8
 8D 04 AD 01 00 00 00 31 D2 B9 03 00 00 00 F7 F1 A3 38 1F 75 00 61 E9 CD
 29 EE FF 50 A1 98 37 5B 00 8D 04 40 50 DB 04 24 A1 9C 37 5B 00 C1 E0 02
 89 04 24 DA 34 24 58 D9 C0 D9 E0 D9 5E 14 DC C0 D9 5E 1C 58 C3 FF 74 24
@@ -683,11 +795,11 @@ FF 74 24 14 FF 74 24 14 FF 74 24 14 8B 04 24 8B 08 FF 51 30 5A 50 52 6A
 C1 50 DB 04 24 58 8B 4C 24 10 D8 01 D9 19 58 C2 0C 00 A1 98 37 5B 00 8D
 04 40 8B 0D 9C 37 5B 00 8D 14 8D 00 00 00 00 29 D0 69 C0 40 1F 00 00 6B
 C9 63 89 CA D1 EA 85 C0 79 02 F7 DA 01 D0 99 F7 F9 C3 56 57 89 C6 83 EC
-40 89 E2 6A 40 52 68 34 A0 5A 00 56 E8 47 E5 F4 FF 83 C4 10 89 E0 BF 40
-5D 57 00 E8 6A 00 00 00 74 58 89 F0 BF 59 5D 57 00 E8 5C 00 00 00 74 4A
-89 F0 BF 70 5D 57 00 E8 4E 00 00 00 74 3C 89 F0 BF 7F 5D 57 00 E8 40 00
-00 00 74 2E 89 E0 BF 4C 5D 57 00 E8 32 00 00 00 74 27 89 F0 BF 8E 5D 57
-00 E8 2F 00 00 00 74 19 89 F0 BF 9D 5D 57 00 E8 21 00 00 00 74 0B 31 C0
+40 89 E2 6A 40 52 68 34 A0 5A 00 56 E8 47 E5 F4 FF 83 C4 10 89 E0 BF 12
+5F 57 00 E8 6A 00 00 00 74 58 89 F0 BF 2B 5F 57 00 E8 5C 00 00 00 74 4A
+89 F0 BF 42 5F 57 00 E8 4E 00 00 00 74 3C 89 F0 BF 51 5F 57 00 E8 40 00
+00 00 74 2E 89 E0 BF 1E 5F 57 00 E8 32 00 00 00 74 27 89 F0 BF 60 5F 57
+00 E8 2F 00 00 00 74 19 89 F0 BF 6F 5F 57 00 E8 21 00 00 00 74 0B 31 C0
 EB 0A B8 01 00 00 00 EB 03 83 C8 FF 83 C4 40 5F 5E C3 E8 06 00 00 00 75
 03 80 38 00 C3 57 8A 0F 84 C9 74 17 8A 28 80 FD 61 72 08 80 FD 7A 77 03
 80 ED 20 38 CD 75 04 40 47 EB E3 5F C3 56 8B 74 24 0C FF 15 AC 60 57 00
@@ -702,7 +814,7 @@ A3 18 1F 75 00 C7 05 1C 1F 75 00 01 00 00 00 2B 05 18 1F 75 00 C3 D9 C0
 DC 25 20 1F 75 00 D8 76 04 D9 5E 0C DD 15 20 1F 75 00 D8 76 04 D9 5E 08
 C3 D9 44 24 04 8B 44 24 04 89 41 78 DC 05 28 1F 75 00 DD 15 28 1F 75 00
 D9 51 74 83 EC 08 DD 1C 24 8B 49 14 B8 80 83 4F 00 FF D0 C2 04 00 50 51
-B9 B0 28 71 00 B8 00 68 4A 00 FF D0 D8 0D F5 5C 57 00 D9 E8 D8 D1 DF E0
+B9 B0 28 71 00 B8 00 68 4A 00 FF D0 D8 0D BB 5E 57 00 D9 E8 D8 D1 DF E0
 9E 73 02 D9 C9 DD D8 59 58 C3 D8 3D 18 63 57 00 E8 D1 FF FF FF DE C9 C3
 E8 C9 FF FF FF D9 C0 D8 4C 24 04 D9 5C 24 04 D9 C0 D8 4C 24 08 D9 5C 24
 08 D8 4C 24 0C D9 5C 24 0C 56 89 CE 8B 46 10 68 F6 97 4A 00 C3 89 44 24
@@ -719,14 +831,14 @@ C3 FF 15 AC 60 57 00 8B 15 A0 37 5B 00 83 FA 10 75 09 3C 06 72 05 BA 20
 40 09 C2 41 83 F9 04 72 E6 89 D7 89 E8 2D 7C EA 5C 00 31 D2 B9 94 02 00
 00 F7 F1 83 F8 13 72 05 B8 13 00 00 00 8D 34 85 40 1F 75 00 8B 0D 50 5E
 71 00 01 D9 D9 81 BC 00 00 00 DC C8 D9 81 C0 00 00 00 DC C8 DE C1 D9 81
-C4 00 00 00 DC C8 DE C1 D8 1D FD 5C 57 00 DF E0 9E 73 5F 83 FF 03 75 1D
-8B 41 24 69 C0 A9 00 00 00 03 05 D0 B0 73 00 D9 40 24 D8 1D 01 5D 57 00
-DF E0 9E 73 3D B9 B0 28 71 00 B8 00 68 4A 00 FF D0 D8 06 D9 16 D8 1D 05
-5D 57 00 DF E0 9E 72 28 6A 00 8B 0D 50 5E 71 00 FF 74 19 34 89 D8 31 D2
+C4 00 00 00 DC C8 DE C1 D8 1D CF 5E 57 00 DF E0 9E 73 5F 83 FF 03 75 1D
+8B 41 24 69 C0 A9 00 00 00 03 05 D0 B0 73 00 D9 40 24 D8 1D D3 5E 57 00
+DF E0 9E 73 3D B9 B0 28 71 00 B8 00 68 4A 00 FF D0 D8 06 D9 16 D8 1D D7
+5E 57 00 DF E0 9E 72 28 6A 00 8B 0D 50 5E 71 00 FF 74 19 34 89 D8 31 D2
 B9 F0 00 00 00 F7 F1 50 B8 A0 E5 40 00 FF D0 83 C4 0C C7 06 00 00 00 00
 61 C2 04 00 C6 41 60 01 81 EC B0 00 00 00 E9 29 01 F9 FF 51 6A 01 B8 10
 29 4F 00 FF D0 59 81 EC D8 00 00 00 E9 7D D5 F7 FF D9 C0 D8 64 24 40 D9
-E1 D8 1D 09 5D 57 00 DF E0 9E 76 21 D9 EE D8 D9 DF E0 9E 74 12 8B 44 24
+E1 D8 1D DB 5E 57 00 DF E0 9E 76 21 D9 EE D8 D9 DF E0 9E 74 12 8B 44 24
 6C 6B C0 50 03 05 B8 5E 71 00 F6 00 04 75 06 DD D8 D9 44 24 40 D8 05 10
 63 57 00 C3 52 8B 44 3A 3C 85 C0 78 1E 3B 05 BC 5E 71 00 7F 16 89 F8 31
 D2 B9 F0 00 00 00 F7 F1 50 B8 20 70 4A 00 FF D0 83 C4 04 5A 8B 4C 3A 10
@@ -735,23 +847,42 @@ D2 89 90 94 00 00 00 89 90 98 00 00 00 89 90 9C 00 00 00 89 50 74 89 50
 78 89 50 7C 89 90 84 00 00 00 89 90 88 00 00 00 89 90 8C 00 00 00 81 7C
 24 60 0A D7 44 00 75 07 D9 1D 00 1B 5D 00 C3 DD D8 C3 46 81 C5 94 09 00
 00 3B 35 04 5F 71 00 7C 04 31 F6 31 ED C3 4E 81 ED 94 09 00 00 79 0D 8B
-35 04 5F 71 00 4E 69 EE 94 09 00 00 C3 83 39 00 74 46 51 83 EC 08 54 FF
-15 58 60 57 00 8B 4C 24 08 DF 2C 24 DF 2D 00 1F 75 00 DE E9 D8 71 04 D8
-1D F9 5C 57 00 DF E0 9E 73 11 A1 00 1F 75 00 0B 05 04 1F 75 00 74 04 F3
-90 EB CB 58 A3 00 1F 75 00 58 A3 04 1F 75 00 59 E9 0B 0A F3 FF 00 00 C8
-41 89 88 88 3B 00 00 10 40 00 00 00 3F 00 00 40 40 00 00 C8 41 55 53 45
-52 33 32 2E 44 4C 4C 00 45 6E 75 6D 44 69 73 70 6C 61 79 53 65 74 74 69
-6E 67 73 41 00 53 65 74 50 72 6F 63 65 73 73 44 50 49 41 77 61 72 65 00
-53 50 45 45 44 4F 4D 45 54 45 52 00 43 4F 4D 4D 55 4E 49 43 41 54 4F 52
-00 53 54 52 49 4E 47 5F 52 41 43 45 5F 54 49 4D 45 5F 56 41 4C 55 45 00
-53 54 52 49 4E 47 5F 43 55 52 5F 4C 41 50 00 53 54 52 49 4E 47 5F 43 55
-52 5F 50 4F 53 00 4F 56 4C 5F 50 4F 52 54 52 41 49 54 53 5F 00 50 4C 41
-59 45 52 5F 00 90 90 90 98 37 5B 00 EC 37 5B 00 00 38 5B 00 14 38 5B 00
-64 38 5B 00 78 38 5B 00 8C 38 5B 00 A0 38 5B 00 B4 38 5B 00 04 39 5B 00
-18 39 5B 00 2C 39 5B 00
+35 04 5F 71 00 4E 69 EE 94 09 00 00 C3 E8 D4 FC FF FF 31 C9 D9 E8 D8 A4
+8D 88 00 00 00 D9 84 8D 88 00 00 00 D8 CA DC C1 DE F1 D9 1C 8D 98 1F 75
+00 41 83 F9 03 72 DD DD D8 C3 A1 A4 1F 75 00 05 B9 79 37 9E A3 A4 1F 75
+00 C1 E8 10 50 DB 04 24 58 D8 0D C3 5E 57 00 DE C1 E9 2E 28 FE FF B8 20
+4D 44 00 EB 21 B8 80 4F 44 00 EB 1A B8 30 67 44 00 EB 13 B8 F0 D8 43 00
+EB 0C B8 70 B6 45 00 EB 05 B8 D0 B9 45 00 80 3D 90 1F 75 00 00 74 02 FF
+E0 C3 80 3D 90 1F 75 00 00 0F 85 D9 22 F0 FF C2 08 00 80 3D 90 1F 75 00
+00 0F 85 19 3F EF FF 31 C0 C2 04 00 E8 AF 0A F3 FF D8 15 BF 5E 57 00 DF
+E0 9E 73 08 DD D8 D9 05 BF 5E 57 00 C3 E8 96 0A F3 FF D8 0D 58 63 57 00
+EB 0B E8 89 0A F3 FF D8 0D 08 63 57 00 D9 E8 DE E1 C3 E8 F7 FB FF FF D8
+7C 24 04 D8 61 04 D8 54 24 04 DF E0 9E 76 04 D9 54 24 04 DD D8 E9 DE D0
+E8 FF E8 D7 FB FF FF D8 4B 30 51 D9 1C 24 59 8B 53 28 C3 D9 81 CC 00 00
+00 E8 C0 FB FF FF DE C9 DE C1 C3 FF 74 24 08 FF 74 24 08 E8 10 A5 EE FF
+83 C4 08 E8 A6 FB FF FF DE C9 C3 E8 9E FB FF FF D8 0D C7 5E 57 00 D9 E8
+DE E1 DE C9 C3 81 F9 C8 00 00 00 73 03 8D 42 64 A3 40 BA 6F 00 C3 B9 B0
+28 71 00 E8 F8 09 F3 FF D8 05 A8 1F 75 00 D9 15 A8 1F 75 00 D8 1D BF 5E
+57 00 DF E0 9E 0F 93 C0 0F B6 C0 72 07 83 25 A8 1F 75 00 00 C3 83 39 00
+74 46 51 83 EC 08 54 FF 15 58 60 57 00 8B 4C 24 08 DF 2C 24 DF 2D 00 1F
+75 00 DE E9 D8 71 04 D8 1D CB 5E 57 00 DF E0 9E 73 11 A1 00 1F 75 00 0B
+05 04 1F 75 00 74 04 F3 90 EB CB 58 A3 00 1F 75 00 58 A3 04 1F 75 00 59
+E8 83 08 F3 FF B9 B0 28 71 00 E8 79 09 F3 FF D8 05 94 1F 75 00 D8 15 BF
+5E 57 00 DF E0 9E 0F 93 05 90 1F 75 00 72 15 D8 25 BF 5E 57 00 D8 15 BF
+5E 57 00 DF E0 9E 72 04 DD D8 D9 EE D9 1D 94 1F 75 00 C3 00 00 C8 41 0A
+D7 23 3D 00 00 80 37 0A D7 23 3C 89 88 88 3B 00 00 10 40 00 00 00 3F 00
+00 40 40 00 00 C8 41 55 53 45 52 33 32 2E 44 4C 4C 00 45 6E 75 6D 44 69
+73 70 6C 61 79 53 65 74 74 69 6E 67 73 41 00 53 65 74 50 72 6F 63 65 73
+73 44 50 49 41 77 61 72 65 00 53 50 45 45 44 4F 4D 45 54 45 52 00 43 4F
+4D 4D 55 4E 49 43 41 54 4F 52 00 53 54 52 49 4E 47 5F 52 41 43 45 5F 54
+49 4D 45 5F 56 41 4C 55 45 00 53 54 52 49 4E 47 5F 43 55 52 5F 4C 41 50
+00 53 54 52 49 4E 47 5F 43 55 52 5F 50 4F 53 00 4F 56 4C 5F 50 4F 52 54
+52 41 49 54 53 5F 00 50 4C 41 59 45 52 5F 00 90 98 37 5B 00 EC 37 5B 00
+00 38 5B 00 14 38 5B 00 64 38 5B 00 78 38 5B 00 8C 38 5B 00 A0 38 5B 00
+B4 38 5B 00 04 39 5B 00 18 39 5B 00 2C 39 5B 00
 ```
 
-After it, at `0x175DD8`, come two 32-bit values: a fixed width and height, or `0` and `0` to follow the display.
+After it, at `0x175FA8`, come two 32-bit values: a fixed width and height, or `0` and `0` to follow the display.
 
 | File offset | Original | Patched | What |
 |---|---|---|---|
@@ -787,7 +918,7 @@ After it, at `0x175DD8`, come two 32-bit values: a fixed width and height, or `0
 | `0x0A6850` | `FF 15 58 60 57 00` | `E8 70 F0 0C 00 90` | timer counter |
 | `0x0A673B` | `FF 15 50 62 57 00` | `E8 D1 F1 0C 00 90` | timer ticks |
 | `0x0A687E` | `FF 15 50 62 57 00` | `E8 8E F0 0C 00 90` | timer ticks |
-| `0x04CB9E` | `E8 5D 9B 05 00` | `E8 02 91 12 00` | frame limit |
+| `0x04CB9E` | `E8 5D 9B 05 00` | `E8 8A 92 12 00` | frame limit |
 | `0x0A6751` | `D8 76 04 D9 C0 D8 66` | `E8 E0 F1 0C 00 EB 07` | timer step |
 | `0x0A6894` | `D8 76 04 D9 C0 D8 66` | `E8 9D F0 0C 00 EB 07` | timer step |
 | `0x0A45D0` | `D9 44 24 04 D8` | `E9 7C 13 0D 00` | world time |
@@ -812,6 +943,55 @@ After it, at `0x175DD8`, come two 32-bit values: a fixed width and height, or `0
 | `0x00E838` | `46 81 C5 94 09 00 00` | `E8 3D 74 16 00 90 90` | reset next section |
 | `0x00E841` | `4E 81 ED 94 09 00 00` | `E8 48 74 16 00 90 90` | reset previous section |
 | `0x00E7B6` | `D8 05 10 63 57 00` | `E8 FE 73 16 00 90` | reset height |
+| `0x0B18D4` | `E8 C7 26 01 00` | `E8 CC 43 0C 00` | camera damping |
+| `0x0B195F` | `D8 8D 88 00 00 00` | `D8 0D 98 1F 75 00` | camera damping |
+| `0x0B1974` | `D8 8D 8C 00 00 00` | `D8 0D 9C 1F 75 00` | camera damping |
+| `0x0B198D` | `D8 8D 90 00 00 00` | `D8 0D A0 1F 75 00` | camera damping |
+| `0x0A83A1` | `E8 7E 01 0B 00` | `E8 2C D9 0C 00` | car lighting |
+| `0x0A83B1` | `E8 6E 01 0B 00` | `E8 1C D9 0C 00` | car lighting |
+| `0x0A83BD` | `E8 62 01 0B 00` | `E8 10 D9 0C 00` | car lighting |
+| `0x093D41` | `E8 DE 47 0C 00` | `E8 8C 1F 0E 00` | portrait outline |
+| `0x044EA6` | `E8 75 FE FF FF` | `E8 4B 0E 13 00` | skid mark length |
+| `0x04516B` | `E8 10 FE FF FF` | `E8 8D 0B 13 00` | skid mark fade |
+| `0x0467E2` | `E8 49 FF FF FF` | `E8 1D F5 12 00` | smoke fade |
+| `0x03D962` | `E8 89 FF FF FF` | `E8 A4 83 13 00` | smoke fade |
+| `0x04685D` | `E8 9E FF 05 00 D8 0D 90 67 57 00` | `E8 03 F5 12 00 90 90 90 90 90 90` | smoke drift |
+| `0x03D9D3` | `E8 28 8E 06 00 D8 0D E4 66 57 00` | `E8 9A 83 13 00 90 90 90 90 90 90` | smoke drift |
+| `0x046AC3` | `E8 38 FD 05 00` | `E8 84 F2 12 00` | smoke rise |
+| `0x03DB45` | `E8 B6 8C 06 00` | `E8 02 82 13 00` | smoke rise |
+| `0x051E0F` | `E8 5C 98 00 00` | `E8 FE 3E 12 00` | mud spray |
+| `0x0553EF` | `E8 DC 65 00 00` | `E8 25 09 12 00` | water spray |
+| `0x0513DC` | `D8 81 CC 00 00 00` | `E8 D2 49 12 00 90` | pickup spin |
+| `0x05153B` | `E8 D0 6A 02 00` | `E8 EA 47 12 00` | pickup fade |
+| `0x05366A` | `E8 F1 65 01 00` | `E8 CB 26 12 00` | animation |
+| `0x053693` | `E8 C8 65 01 00` | `E8 A2 26 12 00` | animation |
+| `0x069D3C` | `E8 BF CA 03 00` | `E8 0B C0 10 00` | animation |
+| `0x03B1AE` | `B8 01 00 00 00` | `E8 4B AC 13 00` | speed camera flash |
+| `0x007EA4` | `E8 D7 AF FF FF` | `E8 D9 DE 16 00` | police brake |
+| `0x007FFE` | `E8 7D AE FF FF` | `E8 7F DD 16 00` | police brake |
+| `0x0080EB` | `E8 90 AD FF FF` | `E8 92 DC 16 00` | police brake |
+| `0x008ECC` | `E8 AF 9F FF FF` | `E8 B1 CE 16 00` | police brake |
+| `0x01F7F9` | `E8 02 70 08 00` | `E8 4E 65 15 00` | Supercop pedal |
+| `0x0204B3` | `E8 48 63 08 00` | `E8 94 58 15 00` | Supercop pedal |
+| `0x01F29A` | `8B 4B 30 8B 53 28` | `E8 03 6B 15 00 90` | Supercop patrol |
+| `0x04E9D5` | `A3 40 BA 6F 00` | `E8 13 74 12 00` | turbo tank |
+| `0x05CCE8` | `D8 0D D8 68 57 00` | `E8 EE 90 11 00 90` | mail drift |
+| `0x05CCFC` | `D8 0D D8 68 57 00` | `E8 DA 90 11 00 90` | mail drift |
+| `0x05B0B1` | `E8 2A 52 00 00` | `E8 0D AD 11 00` | debris spin |
+| `0x05B0C6` | `E8 15 52 00 00` | `E8 F8 AC 11 00` | debris spin |
+| `0x05B0DB` | `E8 00 52 00 00` | `E8 E3 AC 11 00` | debris spin |
+| `0x05C736` | `E8 A5 3B 00 00` | `E8 88 96 11 00` | debris spin |
+| `0x05C74B` | `E8 90 3B 00 00` | `E8 73 96 11 00` | debris spin |
+| `0x05C760` | `E8 7B 3B 00 00` | `E8 5E 96 11 00` | debris spin |
+| `0x05D006` | `E8 D5 32 00 00` | `E8 B8 8D 11 00` | debris spin |
+| `0x05D01B` | `E8 C0 32 00 00` | `E8 A3 8D 11 00` | debris spin |
+| `0x05D030` | `E8 AB 32 00 00` | `E8 8E 8D 11 00` | debris spin |
+| `0x061271` | `E8 6A F0 FF FF` | `E8 4D 4B 11 00` | debris spin |
+| `0x061286` | `E8 55 F0 FF FF` | `E8 38 4B 11 00` | debris spin |
+| `0x06129B` | `E8 40 F0 FF FF` | `E8 23 4B 11 00` | debris spin |
+| `0x062421` | `E8 BA DE FF FF` | `E8 9D 39 11 00` | debris spin |
+| `0x062436` | `E8 A5 DE FF FF` | `E8 88 39 11 00` | debris spin |
+| `0x06244B` | `E8 90 DE FF FF` | `E8 73 39 11 00` | debris spin |
 | `0x000248` | `08 44 1C 00` | `00 50 1C 00` | data section size |
 | `0x0001F8` | `4A 44 17 00` | `00 50 17 00` | code section size |
 | `0x0CD478` | `68 70` | `EB B6` | CD check |
@@ -1000,13 +1180,13 @@ B4 B4 73 00 50 8B 08 FF 51 5C 6A 05 6A 19 A1 B4 B4 73 00 50 8B 08 FF 51
 8B 08 FF 51 58 6A 00 6A 0F A1 B4 B4 73 00 50 8B 08 FF 51 5C FF 74 24 14
 FF 74 24 14 FF 74 24 14 FF 74 24 14 8B 04 24 8B 08 FF 51 30 5A 50 52 6A
 0F A1 B4 B4 73 00 50 8B 08 FF 51 5C 58 C2 10 00 8B 44 24 04 8B 08 FF 61
-30 60 68 0D 5D 57 00 FF 15 A0 60 57 00 89 C6 85 F6 74 12 68 2D 5D 57 00
-56 FF 15 FC 60 57 00 85 C0 74 02 FF D0 8B 1D D8 5D 57 00 8B 2D DC 5D 57
+30 60 68 DF 5E 57 00 FF 15 A0 60 57 00 89 C6 85 F6 74 12 68 FF 5E 57 00
+56 FF 15 FC 60 57 00 85 C0 74 02 FF D0 8B 1D A8 5F 57 00 8B 2D AC 5F 57
 00 85 DB 75 61 81 EC 9C 00 00 00 89 E7 B9 27 00 00 00 31 C0 F3 AB 66 C7
-44 24 24 9C 00 85 F6 74 2B 68 18 5D 57 00 56 FF 15 FC 60 57 00 85 C0 74
+44 24 24 9C 00 85 F6 74 2B 68 EA 5E 57 00 56 FF 15 FC 60 57 00 85 C0 74
 1B 54 6A FF 6A 00 FF D0 85 C0 74 10 8B 5C 24 6C 8B 6C 24 70 85 DB 74 04
 85 ED 75 14 6A 00 FF 15 F4 61 57 00 89 C3 6A 01 FF 15 F4 61 57 00 89 C5
-81 C4 9C 00 00 00 BE A8 5D 57 00 B9 0C 00 00 00 AD 89 18 89 68 04 E2 F8
+81 C4 9C 00 00 00 BE 78 5F 57 00 B9 0C 00 00 00 AD 89 18 89 68 04 E2 F8
 8D 04 AD 01 00 00 00 31 D2 B9 03 00 00 00 F7 F1 A3 38 1F 75 00 61 E9 CD
 29 EE FF 50 A1 98 37 5B 00 8D 04 40 50 DB 04 24 A1 9C 37 5B 00 C1 E0 02
 89 04 24 DA 34 24 58 D9 C0 D9 E0 D9 5E 14 DC C0 D9 5E 1C 58 C3 FF 74 24
@@ -1015,11 +1195,11 @@ FF 74 24 14 FF 74 24 14 FF 74 24 14 8B 04 24 8B 08 FF 51 30 5A 50 52 6A
 C1 50 DB 04 24 58 8B 4C 24 10 D8 01 D9 19 58 C2 0C 00 A1 98 37 5B 00 8D
 04 40 8B 0D 9C 37 5B 00 8D 14 8D 00 00 00 00 29 D0 69 C0 40 1F 00 00 6B
 C9 63 89 CA D1 EA 85 C0 79 02 F7 DA 01 D0 99 F7 F9 C3 56 57 89 C6 83 EC
-40 89 E2 6A 40 52 68 34 A0 5A 00 56 E8 47 E5 F4 FF 83 C4 10 89 E0 BF 40
-5D 57 00 E8 6A 00 00 00 74 58 89 F0 BF 59 5D 57 00 E8 5C 00 00 00 74 4A
-89 F0 BF 70 5D 57 00 E8 4E 00 00 00 74 3C 89 F0 BF 7F 5D 57 00 E8 40 00
-00 00 74 2E 89 E0 BF 4C 5D 57 00 E8 32 00 00 00 74 27 89 F0 BF 8E 5D 57
-00 E8 2F 00 00 00 74 19 89 F0 BF 9D 5D 57 00 E8 21 00 00 00 74 0B 31 C0
+40 89 E2 6A 40 52 68 34 A0 5A 00 56 E8 47 E5 F4 FF 83 C4 10 89 E0 BF 12
+5F 57 00 E8 6A 00 00 00 74 58 89 F0 BF 2B 5F 57 00 E8 5C 00 00 00 74 4A
+89 F0 BF 42 5F 57 00 E8 4E 00 00 00 74 3C 89 F0 BF 51 5F 57 00 E8 40 00
+00 00 74 2E 89 E0 BF 1E 5F 57 00 E8 32 00 00 00 74 27 89 F0 BF 60 5F 57
+00 E8 2F 00 00 00 74 19 89 F0 BF 6F 5F 57 00 E8 21 00 00 00 74 0B 31 C0
 EB 0A B8 01 00 00 00 EB 03 83 C8 FF 83 C4 40 5F 5E C3 E8 06 00 00 00 75
 03 80 38 00 C3 57 8A 0F 84 C9 74 17 8A 28 80 FD 61 72 08 80 FD 7A 77 03
 80 ED 20 38 CD 75 04 40 47 EB E3 5F C3 56 8B 74 24 0C FF 15 AC 60 57 00
@@ -1034,7 +1214,7 @@ A3 18 1F 75 00 C7 05 1C 1F 75 00 01 00 00 00 2B 05 18 1F 75 00 C3 D9 C0
 DC 25 20 1F 75 00 D8 76 04 D9 5E 0C DD 15 20 1F 75 00 D8 76 04 D9 5E 08
 C3 D9 44 24 04 8B 44 24 04 89 41 78 DC 05 28 1F 75 00 DD 15 28 1F 75 00
 D9 51 74 83 EC 08 DD 1C 24 8B 49 14 B8 80 83 4F 00 FF D0 C2 04 00 50 51
-B9 B0 28 71 00 B8 00 68 4A 00 FF D0 D8 0D F5 5C 57 00 D9 E8 D8 D1 DF E0
+B9 B0 28 71 00 B8 00 68 4A 00 FF D0 D8 0D BB 5E 57 00 D9 E8 D8 D1 DF E0
 9E 73 02 D9 C9 DD D8 59 58 C3 D8 3D 18 63 57 00 E8 D1 FF FF FF DE C9 C3
 E8 C9 FF FF FF D9 C0 D8 4C 24 04 D9 5C 24 04 D9 C0 D8 4C 24 08 D9 5C 24
 08 D8 4C 24 0C D9 5C 24 0C 56 89 CE 8B 46 10 68 F6 97 4A 00 C3 89 44 24
@@ -1051,14 +1231,14 @@ C3 FF 15 AC 60 57 00 8B 15 A0 37 5B 00 83 FA 10 75 09 3C 06 72 05 BA 20
 40 09 C2 41 83 F9 04 72 E6 89 D7 89 E8 2D 7C EA 5C 00 31 D2 B9 94 02 00
 00 F7 F1 83 F8 13 72 05 B8 13 00 00 00 8D 34 85 40 1F 75 00 8B 0D 50 5E
 71 00 01 D9 D9 81 BC 00 00 00 DC C8 D9 81 C0 00 00 00 DC C8 DE C1 D9 81
-C4 00 00 00 DC C8 DE C1 D8 1D FD 5C 57 00 DF E0 9E 73 5F 83 FF 03 75 1D
-8B 41 24 69 C0 A9 00 00 00 03 05 D0 B0 73 00 D9 40 24 D8 1D 01 5D 57 00
-DF E0 9E 73 3D B9 B0 28 71 00 B8 00 68 4A 00 FF D0 D8 06 D9 16 D8 1D 05
-5D 57 00 DF E0 9E 72 28 6A 00 8B 0D 50 5E 71 00 FF 74 19 34 89 D8 31 D2
+C4 00 00 00 DC C8 DE C1 D8 1D CF 5E 57 00 DF E0 9E 73 5F 83 FF 03 75 1D
+8B 41 24 69 C0 A9 00 00 00 03 05 D0 B0 73 00 D9 40 24 D8 1D D3 5E 57 00
+DF E0 9E 73 3D B9 B0 28 71 00 B8 00 68 4A 00 FF D0 D8 06 D9 16 D8 1D D7
+5E 57 00 DF E0 9E 72 28 6A 00 8B 0D 50 5E 71 00 FF 74 19 34 89 D8 31 D2
 B9 F0 00 00 00 F7 F1 50 B8 A0 E5 40 00 FF D0 83 C4 0C C7 06 00 00 00 00
 61 C2 04 00 C6 41 60 01 81 EC B0 00 00 00 E9 29 01 F9 FF 51 6A 01 B8 10
 29 4F 00 FF D0 59 81 EC D8 00 00 00 E9 7D D5 F7 FF D9 C0 D8 64 24 40 D9
-E1 D8 1D 09 5D 57 00 DF E0 9E 76 21 D9 EE D8 D9 DF E0 9E 74 12 8B 44 24
+E1 D8 1D DB 5E 57 00 DF E0 9E 76 21 D9 EE D8 D9 DF E0 9E 74 12 8B 44 24
 6C 6B C0 50 03 05 B8 5E 71 00 F6 00 04 75 06 DD D8 D9 44 24 40 D8 05 10
 63 57 00 C3 52 8B 44 3A 3C 85 C0 78 1E 3B 05 BC 5E 71 00 7F 16 89 F8 31
 D2 B9 F0 00 00 00 F7 F1 50 B8 20 70 4A 00 FF D0 83 C4 04 5A 8B 4C 3A 10
@@ -1067,20 +1247,39 @@ D2 89 90 94 00 00 00 89 90 98 00 00 00 89 90 9C 00 00 00 89 50 74 89 50
 78 89 50 7C 89 90 84 00 00 00 89 90 88 00 00 00 89 90 8C 00 00 00 81 7C
 24 60 0A D7 44 00 75 07 D9 1D 00 1B 5D 00 C3 DD D8 C3 46 81 C5 94 09 00
 00 3B 35 04 5F 71 00 7C 04 31 F6 31 ED C3 4E 81 ED 94 09 00 00 79 0D 8B
-35 04 5F 71 00 4E 69 EE 94 09 00 00 C3 83 39 00 74 46 51 83 EC 08 54 FF
-15 58 60 57 00 8B 4C 24 08 DF 2C 24 DF 2D 00 1F 75 00 DE E9 D8 71 04 D8
-1D F9 5C 57 00 DF E0 9E 73 11 A1 00 1F 75 00 0B 05 04 1F 75 00 74 04 F3
-90 EB CB 58 A3 00 1F 75 00 58 A3 04 1F 75 00 59 E9 0B 0A F3 FF 00 00 C8
-41 89 88 88 3B 00 00 10 40 00 00 00 3F 00 00 40 40 00 00 C8 41 55 53 45
-52 33 32 2E 44 4C 4C 00 45 6E 75 6D 44 69 73 70 6C 61 79 53 65 74 74 69
-6E 67 73 41 00 53 65 74 50 72 6F 63 65 73 73 44 50 49 41 77 61 72 65 00
-53 50 45 45 44 4F 4D 45 54 45 52 00 43 4F 4D 4D 55 4E 49 43 41 54 4F 52
-00 53 54 52 49 4E 47 5F 52 41 43 45 5F 54 49 4D 45 5F 56 41 4C 55 45 00
-53 54 52 49 4E 47 5F 43 55 52 5F 4C 41 50 00 53 54 52 49 4E 47 5F 43 55
-52 5F 50 4F 53 00 4F 56 4C 5F 50 4F 52 54 52 41 49 54 53 5F 00 50 4C 41
-59 45 52 5F 00 90 90 90 98 37 5B 00 EC 37 5B 00 00 38 5B 00 14 38 5B 00
-64 38 5B 00 78 38 5B 00 8C 38 5B 00 A0 38 5B 00 B4 38 5B 00 04 39 5B 00
-18 39 5B 00 2C 39 5B 00
+35 04 5F 71 00 4E 69 EE 94 09 00 00 C3 E8 D4 FC FF FF 31 C9 D9 E8 D8 A4
+8D 88 00 00 00 D9 84 8D 88 00 00 00 D8 CA DC C1 DE F1 D9 1C 8D 98 1F 75
+00 41 83 F9 03 72 DD DD D8 C3 A1 A4 1F 75 00 05 B9 79 37 9E A3 A4 1F 75
+00 C1 E8 10 50 DB 04 24 58 D8 0D C3 5E 57 00 DE C1 E9 2E 28 FE FF B8 20
+4D 44 00 EB 21 B8 80 4F 44 00 EB 1A B8 30 67 44 00 EB 13 B8 F0 D8 43 00
+EB 0C B8 70 B6 45 00 EB 05 B8 D0 B9 45 00 80 3D 90 1F 75 00 00 74 02 FF
+E0 C3 80 3D 90 1F 75 00 00 0F 85 D9 22 F0 FF C2 08 00 80 3D 90 1F 75 00
+00 0F 85 19 3F EF FF 31 C0 C2 04 00 E8 AF 0A F3 FF D8 15 BF 5E 57 00 DF
+E0 9E 73 08 DD D8 D9 05 BF 5E 57 00 C3 E8 96 0A F3 FF D8 0D 58 63 57 00
+EB 0B E8 89 0A F3 FF D8 0D 08 63 57 00 D9 E8 DE E1 C3 E8 F7 FB FF FF D8
+7C 24 04 D8 61 04 D8 54 24 04 DF E0 9E 76 04 D9 54 24 04 DD D8 E9 DE D0
+E8 FF E8 D7 FB FF FF D8 4B 30 51 D9 1C 24 59 8B 53 28 C3 D9 81 CC 00 00
+00 E8 C0 FB FF FF DE C9 DE C1 C3 FF 74 24 08 FF 74 24 08 E8 10 A5 EE FF
+83 C4 08 E8 A6 FB FF FF DE C9 C3 E8 9E FB FF FF D8 0D C7 5E 57 00 D9 E8
+DE E1 DE C9 C3 81 F9 C8 00 00 00 73 03 8D 42 64 A3 40 BA 6F 00 C3 B9 B0
+28 71 00 E8 F8 09 F3 FF D8 05 A8 1F 75 00 D9 15 A8 1F 75 00 D8 1D BF 5E
+57 00 DF E0 9E 0F 93 C0 0F B6 C0 72 07 83 25 A8 1F 75 00 00 C3 83 39 00
+74 46 51 83 EC 08 54 FF 15 58 60 57 00 8B 4C 24 08 DF 2C 24 DF 2D 00 1F
+75 00 DE E9 D8 71 04 D8 1D CB 5E 57 00 DF E0 9E 73 11 A1 00 1F 75 00 0B
+05 04 1F 75 00 74 04 F3 90 EB CB 58 A3 00 1F 75 00 58 A3 04 1F 75 00 59
+E8 83 08 F3 FF B9 B0 28 71 00 E8 79 09 F3 FF D8 05 94 1F 75 00 D8 15 BF
+5E 57 00 DF E0 9E 0F 93 05 90 1F 75 00 72 15 D8 25 BF 5E 57 00 D8 15 BF
+5E 57 00 DF E0 9E 72 04 DD D8 D9 EE D9 1D 94 1F 75 00 C3 00 00 C8 41 0A
+D7 23 3D 00 00 80 37 0A D7 23 3C 89 88 88 3B 00 00 10 40 00 00 00 3F 00
+00 40 40 00 00 C8 41 55 53 45 52 33 32 2E 44 4C 4C 00 45 6E 75 6D 44 69
+73 70 6C 61 79 53 65 74 74 69 6E 67 73 41 00 53 65 74 50 72 6F 63 65 73
+73 44 50 49 41 77 61 72 65 00 53 50 45 45 44 4F 4D 45 54 45 52 00 43 4F
+4D 4D 55 4E 49 43 41 54 4F 52 00 53 54 52 49 4E 47 5F 52 41 43 45 5F 54
+49 4D 45 5F 56 41 4C 55 45 00 53 54 52 49 4E 47 5F 43 55 52 5F 4C 41 50
+00 53 54 52 49 4E 47 5F 43 55 52 5F 50 4F 53 00 4F 56 4C 5F 50 4F 52 54
+52 41 49 54 53 5F 00 50 4C 41 59 45 52 5F 00 90 98 37 5B 00 EC 37 5B 00
+00 38 5B 00 14 38 5B 00 64 38 5B 00 78 38 5B 00 8C 38 5B 00 A0 38 5B 00
+B4 38 5B 00 04 39 5B 00 18 39 5B 00 2C 39 5B 00
 """)
 if data[CODE_OFFSET:CODE_OFFSET + len(CODE)] not in (bytes(len(CODE)), CODE):
     raise RuntimeError("Unexpected bytes where the code goes. Wrong executable version?")
@@ -1121,7 +1320,7 @@ for offset, old, new in [
     (0x0A6850, "FF 15 58 60 57 00", "E8 70 F0 0C 00 90"),
     (0x0A673B, "FF 15 50 62 57 00", "E8 D1 F1 0C 00 90"),
     (0x0A687E, "FF 15 50 62 57 00", "E8 8E F0 0C 00 90"),
-    (0x04CB9E, "E8 5D 9B 05 00", "E8 02 91 12 00"),
+    (0x04CB9E, "E8 5D 9B 05 00", "E8 8A 92 12 00"),
     (0x0A6751, "D8 76 04 D9 C0 D8 66", "E8 E0 F1 0C 00 EB 07"),
     (0x0A6894, "D8 76 04 D9 C0 D8 66", "E8 9D F0 0C 00 EB 07"),
     (0x0A45D0, "D9 44 24 04 D8", "E9 7C 13 0D 00"),
@@ -1146,6 +1345,55 @@ for offset, old, new in [
     (0x00E838, "46 81 C5 94 09 00 00", "E8 3D 74 16 00 90 90"),
     (0x00E841, "4E 81 ED 94 09 00 00", "E8 48 74 16 00 90 90"),
     (0x00E7B6, "D8 05 10 63 57 00", "E8 FE 73 16 00 90"),
+    (0x0B18D4, "E8 C7 26 01 00", "E8 CC 43 0C 00"),
+    (0x0B195F, "D8 8D 88 00 00 00", "D8 0D 98 1F 75 00"),
+    (0x0B1974, "D8 8D 8C 00 00 00", "D8 0D 9C 1F 75 00"),
+    (0x0B198D, "D8 8D 90 00 00 00", "D8 0D A0 1F 75 00"),
+    (0x0A83A1, "E8 7E 01 0B 00", "E8 2C D9 0C 00"),
+    (0x0A83B1, "E8 6E 01 0B 00", "E8 1C D9 0C 00"),
+    (0x0A83BD, "E8 62 01 0B 00", "E8 10 D9 0C 00"),
+    (0x093D41, "E8 DE 47 0C 00", "E8 8C 1F 0E 00"),
+    (0x044EA6, "E8 75 FE FF FF", "E8 4B 0E 13 00"),
+    (0x04516B, "E8 10 FE FF FF", "E8 8D 0B 13 00"),
+    (0x0467E2, "E8 49 FF FF FF", "E8 1D F5 12 00"),
+    (0x03D962, "E8 89 FF FF FF", "E8 A4 83 13 00"),
+    (0x04685D, "E8 9E FF 05 00 D8 0D 90 67 57 00", "E8 03 F5 12 00 90 90 90 90 90 90"),
+    (0x03D9D3, "E8 28 8E 06 00 D8 0D E4 66 57 00", "E8 9A 83 13 00 90 90 90 90 90 90"),
+    (0x046AC3, "E8 38 FD 05 00", "E8 84 F2 12 00"),
+    (0x03DB45, "E8 B6 8C 06 00", "E8 02 82 13 00"),
+    (0x051E0F, "E8 5C 98 00 00", "E8 FE 3E 12 00"),
+    (0x0553EF, "E8 DC 65 00 00", "E8 25 09 12 00"),
+    (0x0513DC, "D8 81 CC 00 00 00", "E8 D2 49 12 00 90"),
+    (0x05153B, "E8 D0 6A 02 00", "E8 EA 47 12 00"),
+    (0x05366A, "E8 F1 65 01 00", "E8 CB 26 12 00"),
+    (0x053693, "E8 C8 65 01 00", "E8 A2 26 12 00"),
+    (0x069D3C, "E8 BF CA 03 00", "E8 0B C0 10 00"),
+    (0x03B1AE, "B8 01 00 00 00", "E8 4B AC 13 00"),
+    (0x007EA4, "E8 D7 AF FF FF", "E8 D9 DE 16 00"),
+    (0x007FFE, "E8 7D AE FF FF", "E8 7F DD 16 00"),
+    (0x0080EB, "E8 90 AD FF FF", "E8 92 DC 16 00"),
+    (0x008ECC, "E8 AF 9F FF FF", "E8 B1 CE 16 00"),
+    (0x01F7F9, "E8 02 70 08 00", "E8 4E 65 15 00"),
+    (0x0204B3, "E8 48 63 08 00", "E8 94 58 15 00"),
+    (0x01F29A, "8B 4B 30 8B 53 28", "E8 03 6B 15 00 90"),
+    (0x04E9D5, "A3 40 BA 6F 00", "E8 13 74 12 00"),
+    (0x05CCE8, "D8 0D D8 68 57 00", "E8 EE 90 11 00 90"),
+    (0x05CCFC, "D8 0D D8 68 57 00", "E8 DA 90 11 00 90"),
+    (0x05B0B1, "E8 2A 52 00 00", "E8 0D AD 11 00"),
+    (0x05B0C6, "E8 15 52 00 00", "E8 F8 AC 11 00"),
+    (0x05B0DB, "E8 00 52 00 00", "E8 E3 AC 11 00"),
+    (0x05C736, "E8 A5 3B 00 00", "E8 88 96 11 00"),
+    (0x05C74B, "E8 90 3B 00 00", "E8 73 96 11 00"),
+    (0x05C760, "E8 7B 3B 00 00", "E8 5E 96 11 00"),
+    (0x05D006, "E8 D5 32 00 00", "E8 B8 8D 11 00"),
+    (0x05D01B, "E8 C0 32 00 00", "E8 A3 8D 11 00"),
+    (0x05D030, "E8 AB 32 00 00", "E8 8E 8D 11 00"),
+    (0x061271, "E8 6A F0 FF FF", "E8 4D 4B 11 00"),
+    (0x061286, "E8 55 F0 FF FF", "E8 38 4B 11 00"),
+    (0x06129B, "E8 40 F0 FF FF", "E8 23 4B 11 00"),
+    (0x062421, "E8 BA DE FF FF", "E8 9D 39 11 00"),
+    (0x062436, "E8 A5 DE FF FF", "E8 88 39 11 00"),
+    (0x06244B, "E8 90 DE FF FF", "E8 73 39 11 00"),
     (0x000248, "08 44 1C 00", "00 50 1C 00"),
     (0x0001F8, "4A 44 17 00", "00 50 17 00"),
     (0x0CD478, "68 70", "EB B6"),

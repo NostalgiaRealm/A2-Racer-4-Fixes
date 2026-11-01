@@ -16,6 +16,10 @@
 ; Car physics:
 ; The physics world steps at a fixed 66 Hz, but the game sets forces once per frame,
 ; and it kept its time in a float. See the code at the end for what that broke.
+;
+; Frame rate:
+; The AI, the camera and many effects also count per frame what they mean per second.
+; From 25 frames per second up they now do what they did at 25.
 
 bits 32
 org 0x575500
@@ -79,6 +83,19 @@ RESET_HEIGHT      equ 0x576310          ; float 20, how high above the road the 
 SECTION_COUNT     equ 0x715f04
 RESET_STAMP       equ 0x5d1b00          ; float, when the last reset took place
 ENTER_RESET_RETURN equ 0x44d70a         ; where the Enter key's call of the reset returns
+FLOAT_FIVE        equ 0x576308
+FLOAT_TEN         equ 0x576358
+SKID_ADD_SECTION  equ 0x444d20
+SKID_FADE         equ 0x444f80
+TYRE_SMOKE_FADE   equ 0x446730
+DAMAGE_SMOKE_FADE equ 0x43d8f0
+MUD_SPRAY         equ 0x45b670
+WATER_SPRAY       equ 0x45b9d0
+ANIMATION_STEP    equ 0x469c60
+PICKUP_FADE       equ 0x478010
+PARTICLE_RANDOM   equ 0x4602e0
+ADD_BRAKE         equ 0x402e80
+TURBO_STAMP       equ 0x6fba40          ; GetTickCount, when the tank last lost a unit
 
 ; Free memory after the game's data, in the last page of its data section.
 LAST_FRAME   equ 0x751f00               ; counter at the start of the last frame
@@ -92,6 +109,11 @@ REFERENCE_WIDTH equ 0x751f38            ; 4:3 width for this height
 FADE_REST    equ 0x751f3c               ; float, what the fade of a trailer lost to rounding
 HUNG_TIMES   equ 0x751f40               ; floats, how long each car has hung, 20 in all
 HUNG_TIME_COUNT equ 20
+TICK         equ 0x751f90               ; byte, 1 in a frame where a tick of 25 Hz falls
+TICK_REST    equ 0x751f94               ; float, time since the last tick
+CAMERA_K     equ 0x751f98               ; floats, how far the camera moves this frame, 3 in all
+COLOR_SEQUENCE equ 0x751fa4             ; steps through the values of color_round
+FLASH_TIME   equ 0x751fa8               ; float, how long the flash of a speed camera has lasted
 
 MODE_COUNT    equ 12
 
@@ -590,6 +612,7 @@ world_step:
 ; frame gets its share. Below that rate a frame gets one whole push, as it always did.
 ; Without this traffic drives twice as hard at 50 frames per second, its force sits
 ; below the centre of mass, and from about 45 frames per second that lifts its nose.
+; Keeps all registers.
 frame_share:
     push eax
     push ecx
@@ -961,6 +984,212 @@ reset_previous_section:
 .done:
     ret
 
+; Replaces the debug print at the start of the camera's damping, which has the camera in ebp. Each
+; frame the game moves the camera a fixed part k of the way to where it should be, in each direction
+; of the car, with no look at the time: at 165 frames per second it follows five times as tightly as
+; at 30, sits closer at speed and takes every bump. Work out the part for this frame that keeps the
+; distance it lags behind a moving car the same as at AI_FRAME_RATE. With s the share of this frame
+; that is k*s/(1-k+k*s), which is k at that rate and below. The FMULs now read these.
+camera_damping:
+    call frame_share
+    xor ecx, ecx
+.next:
+    fld1
+    fsub dword [ebp+0x88+ecx*4]
+    fld dword [ebp+0x88+ecx*4]
+    fmul st0, st2
+    fadd st1, st0
+    fdivrp st1, st0
+    fstp dword [CAMERA_K+ecx*4]
+    inc ecx
+    cmp ecx, 3
+    jb .next
+    fstp st0
+    ret
+
+; Replaces the conversion to a whole number when the light of a car follows the road, and of the pulse
+; around a portrait. Rounding toward zero always gives away what doesn't make a whole level. A step of
+; less than a level then does nothing going up, but a whole level going down. The higher the frame rate
+; the smaller the steps, so at 165 frames per second cars stayed dark after a shadow, up to 165 levels
+; when standing still, and above 212 the pulse stopped. There's no room per car to keep the rest. Add a
+; different part of a level each time instead, so that a step of 0.3 goes through 3 times out of 10.
+; It can't go past the target, as the steps are never more than the way to go.
+color_round:
+    mov eax, [COLOR_SEQUENCE]
+    add eax, 0x9e3779b9
+    mov [COLOR_SEQUENCE], eax
+    shr eax, 16
+    push eax
+    fild dword [esp]
+    pop eax
+    fmul dword [one_65536]
+    faddp st1, st0
+    jmp FLOAT_TO_INTEGER
+
+; These replace calls in the game that add or take away a fixed amount per frame, to run them only when
+; a tick of 25 Hz falls in this frame, and in every frame below that rate:
+; a skid mark takes one section per frame up to its limit, so at 165 frames per second a slide leaves
+; a mark of 0.3 seconds, and it fades by one level per frame, so it's gone within a second;
+; smoke fades by one level per frame while it grows by time, so it dies small and early;
+; mud and water start 4 clouds of particles per frame for as long as you are in them, which fills
+; the room for all particles in 0.15 seconds.
+skid_section:
+    mov eax, SKID_ADD_SECTION
+    jmp short tick_gate
+skid_fade:
+    mov eax, SKID_FADE
+    jmp short tick_gate
+tyre_smoke_fade:
+    mov eax, TYRE_SMOKE_FADE
+    jmp short tick_gate
+damage_smoke_fade:
+    mov eax, DAMAGE_SMOKE_FADE
+    jmp short tick_gate
+mud_spray:
+    mov eax, MUD_SPRAY
+    jmp short tick_gate
+water_spray:
+    mov eax, WATER_SPRAY
+tick_gate:
+    cmp byte [TICK], 0
+    je .skip
+    jmp eax
+.skip:
+    ret
+
+; The same for the shrinking of a pickup that was taken, a script that multiplies its size by 0.6 per frame.
+pickup_fade:
+    cmp byte [TICK], 0
+    jne PICKUP_FADE
+    ret 8
+
+; The same for the animated objects. A step takes a frame more than its time, and loses what its last
+; frame went over, so they ran up to 3 times as fast at high frame rates. Returns that it isn't done.
+animation_step:
+    cmp byte [TICK], 0
+    jne ANIMATION_STEP
+    xor eax, eax
+    ret 4
+
+; Replaces reading the time step, with the timer object in ecx, in code that runs on a tick, and where the
+; game takes a value from one frame's time and doesn't add it up:
+; the pedal of a Supercop that is trying to get free, 800 times the time step, which leaves it with
+; 4.8 percent at 165 frames per second instead of 26.7 at 30;
+; how fast smoke rises.
+long_step:
+    call GAME_TIME_STEP
+    fcom dword [tick_time]
+    fnstsw ax
+    sahf
+    jae .done
+    fstp st0
+    fld dword [tick_time]
+.done:
+    ret
+
+; Replace the time step and the factor in the slowing down of smoke. The game multiplies its speed
+; per frame by 15 or 20 times the time step, which is the wrong way around: the shorter the frame, the
+; harder it stops, so at high frame rates smoke stays where it starts. Below 15 frames per second it hit
+; a limit of 0.99 and shot away. Multiply by 1 - 10 or 1 - 5 times the time step, the same at 25 frames
+; per second, so smoke goes as far at any frame rate.
+smoke_drift_tyre:
+    call GAME_TIME_STEP
+    fmul dword [FLOAT_TEN]
+    jmp short smoke_drift
+smoke_drift_damage:
+    call GAME_TIME_STEP
+    fmul dword [FLOAT_FIVE]
+smoke_drift:
+    fld1
+    fsubrp st1, st0
+    ret
+
+; Replaces the call that adds to the brake of a police car that is driving faster than the one it is
+; after, with this amount on the stack and the controls in ecx. Most of the time the code before it
+; has just set that brake to 0, so the brake is one frame's amount, and that gets smaller at higher frame
+; rates: 13 percent at 30 frames per second, 2 at 165. Such a car hardly slowed down any more and ran into
+; or past its target. Brake at least as hard as a frame at AI_FRAME_RATE would.
+police_brake:
+    call frame_share
+    fdivr dword [esp+4]
+    fsub dword [ecx+4]
+    fcom dword [esp+4]
+    fnstsw ax
+    sahf
+    jbe .keep
+    fst dword [esp+4]
+.keep:
+    fstp st0
+    jmp ADD_BRAKE
+
+; Replaces loading the step for the gas of a Supercop that keeps to its patrol speed, 1 percent
+; per frame, with its settings in ebx. Give each frame its share.
+patrol_step:
+    call frame_share
+    fmul dword [ebx+0x30]
+    push ecx
+    fstp dword [esp]
+    pop ecx
+    mov edx, [ebx+0x28]
+    ret
+
+; Replaces adding the turn of a pickup per frame, in ecx, with its angle in st0. The script asks for an
+; amount per second, but gets it while loading, when the time step is still a default of 0.1.
+pickup_spin:
+    fld dword [ecx+0xcc]
+    call frame_share
+    fmulp st1, st0
+    faddp st1, st0
+    ret
+
+; Replaces one of three random numbers that turn a piece of debris per frame, with no look at the time.
+particle_spin:
+    push dword [esp+8]
+    push dword [esp+8]
+    call PARTICLE_RANDOM
+    add esp, 8
+    call frame_share
+    fmulp st1, st0
+    ret
+
+; Replaces multiplying the speed of a cloud of letters by 0.99 per frame, with that speed in st0.
+mail_drift:
+    call frame_share
+    fmul dword [one_100]
+    fld1
+    fsubrp st1, st0
+    fmulp st1, st0
+    ret
+
+; Replaces storing the time when the tank of the turbo last lost a unit, with now in eax, now minus the
+; stored time in ecx and the stored time in edx. A unit takes at least 100 ms and then the rest of a
+; frame, so how long a tank lasts depended on the frame rate. Keep what it went over, unless the key
+; has been up.
+turbo_stamp:
+    cmp ecx, 200
+    jae .store
+    lea eax, [edx+100]
+.store:
+    mov [TURBO_STAMP], eax
+    ret
+
+; Replaces saying that the flash of a speed camera is done, which it was after one frame: 33 ms at 30 frames
+; per second, 4 at 240, which a screen may not even show. Returns 1 when it has lasted a tick.
+flash_done:
+    mov ecx, GAME_TIMER_OBJECT
+    call GAME_TIME_STEP
+    fadd dword [FLASH_TIME]
+    fst dword [FLASH_TIME]
+    fcomp dword [tick_time]
+    fnstsw ax
+    sahf
+    setae al
+    movzx eax, al
+    jb .done
+    and dword [FLASH_TIME], 0
+.done:
+    ret
+
 ; Replaces the call to the game timer at the start of every frame, which has the timer
 ; object in ecx. Nothing that was checked needs a limit here any more. This keeps the
 ; frame rate inside the range the physics were measured in, about 440 at most, and far
@@ -994,9 +1223,31 @@ frame_limit:
     mov [LAST_FRAME+4], eax
     pop ecx
 .go:
-    jmp GAME_TIMER_UPDATE
+    call GAME_TIMER_UPDATE
+    ; Then see if a tick falls in this frame. Below 25 frames per second every frame has one.
+    mov ecx, GAME_TIMER_OBJECT
+    call GAME_TIME_STEP
+    fadd dword [TICK_REST]
+    fcom dword [tick_time]
+    fnstsw ax
+    sahf
+    setae byte [TICK]
+    jb .store_rest
+    fsub dword [tick_time]
+    fcom dword [tick_time]
+    fnstsw ax
+    sahf
+    jb .store_rest
+    fstp st0
+    fldz
+.store_rest:
+    fstp dword [TICK_REST]
+    ret
 
 ai_frame_rate:      dd __float32__(25.0)
+tick_time:          dd __float32__(0.04)
+one_65536:          dd __float32__(0.0000152587890625)
+one_100:            dd __float32__(0.01)
 frame_time:         dd __float32__(0.0041666667)
 hung_speed:         dd __float32__(2.25)    ; 1.5 units per second, squared
 hung_up:            dd __float32__(0.5)

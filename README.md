@@ -12,7 +12,8 @@ Fixes for the PC version of **A2 Racer 4**:
 - from Windows Vista on the screen runs in 32-bit color instead of 16-bit, which Windows 8 and newer only emulate;
 - from 66 frames per second on, cars no longer climb invisible ramps or hang in the air, a bug in the game's physics engine that made them pull their front up and stop driving;
 - pressing Enter, or the game putting a car back on the road, now actually frees the car;
-- a car that really gets caught on something, with its wheels in the air, goes back on the road by itself.
+- a car that really gets caught on something, with its wheels in the air, goes back on the road by itself;
+- police cars, the chase camera, car lighting, skid marks, smoke, mud and water, pickups and more no longer change with the frame rate.
 
 They consist of a patched `spel.dat` executable module that holds these fixes, a small patch to `menu.exe` for the CD check, and an automatic patcher called `A2Racer4Fixes`, for 64-bit and 32-bit Windows and Linux, that applies them to the game folder you choose. You run the patcher once.
 
@@ -58,6 +59,22 @@ Collisions can still throw a car, as they always could.
 ## The countdown before a race (v1.4.1)
 
 From v1.1.0 to v1.4.0 the 3, 2, 1 and START before a race were gone. This patch kept a value in a place it took for unused, and the game clears that place when a race loads, so the digits got a size calculated by dividing by zero. The value now sits in memory the game doesn't use.
+
+## Frame rate (v1.5.2)
+
+The car physics stopped depending on the frame rate in v1.4.0 and v1.5.1. A new read through all of the game's code found more that counted per frame what it meant per second. From 25 frames per second up, all of this now behaves the same at any frame rate, as it did at 25:
+
+- **Police:** a chasing police car that drives faster than its target brakes with 13 percent at 30 frames per second and 2 at 165, so at high frame rates it hardly slowed down and ran into or past its target. It now brakes with at least 16. The Supercop trying to reverse out of a stuck spot had the same problem.
+- **Chase camera:** it moved a fixed part of the way per frame, so at 165 frames per second it followed five times as tightly as at 30, sat closer at speed and passed on every bump. If you know the game from a fast PC, the camera now lags more than you're used to.
+- **Car lighting:** cars stayed dark after a shadow or a tunnel. At 165 frames per second a car standing still could stay 165 of 255 levels too dark.
+- **Skid marks:** a long slide left a mark of 0.3 seconds at 165 frames per second, gone within a second. Now it's up to 1.9 seconds, and it fades in 2 to 6 seconds.
+- **Smoke:** at high frame rates it stayed where it started and was gone within a second, at a quarter of its size. Below 15 frames per second it shot far ahead of the car. Now it lasts 4 seconds or more and drifts the same at any frame rate.
+- **Mud and water:** these filled the room for all particles in 0.15 seconds at 165 frames per second, after which sparks and debris didn't show.
+- **Pickups** spun 5 times as fast at 165 as at 30 frames per second, and **animated objects**, **debris** and the shrinking of a pickup you take went by frames too.
+- **Speed camera flash:** it lasted one frame, which at 240 frames per second is 4 ms. Now it's 40 ms.
+- **Turbo tank:** now 10 seconds at any frame rate.
+
+None of this changes how your own car drives, apart from how long the turbo lasts. The details are in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#patch-part-13-what-still-counted-frames).
 
 ## Cars that lift up or float (v1.5.1)
 
@@ -177,6 +194,7 @@ The original game is built around 4:3 display modes. Forcing another shape makes
 9. **32-bit display mode:** see [32-bit display mode](#32-bit-display-mode-v150).
 10. **Cars that get hung up:** see [Cars that get hung up](#cars-that-get-hung-up-v150).
 11. **Contacts in the physics engine:** see [Cars that lift up or float](#cars-that-lift-up-or-float-v151) and [Putting a car back on the road](#putting-a-car-back-on-the-road-v151).
+12. **Frame rate:** see [Frame rate](#frame-rate-v152).
 
 ## How the HUD moves
 
@@ -221,7 +239,8 @@ To install by hand instead: back up `spel.dat` and `menu.exe`, and follow the st
 - The v1.4.1 countdown was checked in-game by the author, and under Wine with software rendering at 4:3 and 16:9.
 - The v1.5.0 display mode was checked in-game by the author on a Radeon 760M under Windows 10: 165 FPS at the display's normal resolution, up from 51/52. The display mode and the 240 FPS limit also ran under Wine with software rendering.
 - The v1.5.0 check for cars that get hung up was checked in-game by the author, and tested under Wine with software rendering, at 165 and 51 frames per second, with a bot and with test placements on a jump ramp. The numbers are in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#patch-part-11-cars-that-get-hung-up).
-- The v1.5.1 physics engine fix was tested under Wine with software rendering, with a bot on all nine stages and with test placements, and with the stuck car of a test read from the running game. It hasn't been checked on real hardware yet. The numbers are in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#patch-part-12-contacts-that-outlive-their-triangle).
+- The v1.5.1 physics engine fix was tested under Wine with software rendering, with a bot on all nine stages and with test placements, and with the stuck car of a test read from the running game. It went out before any check on real hardware. The author then tested the v1.5.2 test build, which includes it, in-game. The numbers are in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#patch-part-12-contacts-that-outlive-their-triangle).
+- The v1.5.2 frame rate fixes were tested under Wine with software rendering, with a bot on all nine stages, at up to 98 frames per second. The author tested the build in-game before the release. The numbers are in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#patch-part-13-what-still-counted-frames).
 - Back up your original files before installing.
 - This project does not include original game assets beyond modified configuration/executable patch files.
 - Testing before v1.1.1 was done on Fedora Linux 44, running the game through Wine using DXVK and DgVoodoo in tandem.
