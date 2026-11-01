@@ -10,7 +10,9 @@ Fixes for the PC version of **A2 Racer 4**:
 - cars no longer lift their nose, lose their drive or crawl on modern PCs: the car physics no longer depend on the frame rate, or on how long the PC or the game has been running;
 - the 3, 2, 1 before a race is back, after v1.1.0 to v1.4.0 of this patch lost it;
 - from Windows Vista on the screen runs in 32-bit color instead of 16-bit, which Windows 8 and newer only emulate;
-- a car that gets hung up on an edge, with its wheels in the air, goes back on the road by itself.
+- from 66 frames per second on, cars no longer climb invisible ramps or hang in the air, a bug in the game's physics engine that made them pull their front up and stop driving;
+- pressing Enter, or the game putting a car back on the road, now actually frees the car;
+- a car that really gets caught on something, with its wheels in the air, goes back on the road by itself.
 
 They consist of a patched `spel.dat` executable module that holds these fixes, a small patch to `menu.exe` for the CD check, and an automatic patcher called `A2Racer4Fixes`, for 64-bit and 32-bit Windows and Linux, that applies them to the game folder you choose. You run the patcher once.
 
@@ -57,13 +59,31 @@ Collisions can still throw a car, as they always could.
 
 From v1.1.0 to v1.4.0 the 3, 2, 1 and START before a race were gone. This patch kept a value in a place it took for unused, and the game clears that place when a race loads, so the digits got a size calculated by dividing by zero. The value now sits in memory the game doesn't use.
 
+## Cars that lift up or float (v1.5.1)
+
+This is the bug that made a car pull its front up out of nowhere and then stop driving, or stay hanging in the air. It sat in the game's physics engine, and it only shows from 66 frames per second on, the rate of the physics. At 51 frames per second you could race without ever seeing it, and at 165 it came back.
+
+When the body of a car touches a triangle of the road, the engine keeps that contact and looks at the distance to the plane of that triangle, and a plane has no edges. It also checks whether the car is still over the triangle, but something the game does once per frame threw that answer away. At low frame rates enough checks got through. From 66 frames per second on, none did. So a body that had touched a slope, a kerb or a ramp kept pressing against an invisible extension of it. Where that plane rises in front of the car, the car climbs it nose first until its front wheels are off the road.
+
+Those checks now count at any frame rate.
+
+## Putting a car back on the road (v1.5.1)
+
+The reset, by Enter or by the check below, had a few faults of its own:
+
+- It left the old contacts in place, and they went along. A car could hang from a plane far above the road with its rear in the air, however often it was reset. A car now starts without contacts.
+- A reset of any car made the Enter key wait 5 seconds, so a racer that kept getting reset kept your Enter from working. Now only Enter itself makes Enter wait.
+- A reset left the car listed on the lane it came from, for the rest of the race, so lanes looked taken for other cars and for the next reset.
+- When the lanes of the last section of a track looked taken, the game stopped with the error `Illegal chunk`.
+- On three stages it could put a car on the ground under a raised road, or on top of a tunnel. It now goes by the height of the lane in those places.
+
 ## Cars that get hung up (v1.5.0)
 
-The body of a car can land on an edge, like the side of one of the wooden jump ramps or a raised part at the end of a bridge. The car then stays there with its wheels spinning in the air, so it looks like it floats, or like its front lifted and it can't drive any further. It doesn't tip off, because the game keeps the center of mass of these cars at the bottom of the body. The game only corrected a car that spins, so a racer could stay up there until the end of the race, and you had to press Enter.
+A car can also really get caught, on the side of a jump ramp or on a part of a bridge, or land on its roof. The game only corrected a car that spins, so a racer could stay there until the end of the race, and you had to press Enter.
 
-A car that now stands still for 3 seconds with its front or rear wheels off the ground, or tipped over, goes back on the road by itself. This goes for you, the racers and the police, and at any frame rate.
+A car that stands still for 3 seconds with its front or rear wheels off the ground, or tipped over, goes back on the road by itself. This goes for you, the racers and the police, and at any frame rate.
 
-Cars can still get hung up for those 3 seconds. A frontal hit also still lifts a car's nose, for example when you run into a truck, and for the same reason: the hit lands above the center of mass.
+A frontal hit still lifts a car's nose, for example when you run into a truck, because the hit lands above the center of mass, which these cars have at the bottom of the body.
 
 ## 32-bit display mode (v1.5.0)
 
@@ -156,6 +176,7 @@ The original game is built around 4:3 display modes. Forcing another shape makes
 8. **Car physics:** see [Car physics](#car-physics-v140).
 9. **32-bit display mode:** see [32-bit display mode](#32-bit-display-mode-v150).
 10. **Cars that get hung up:** see [Cars that get hung up](#cars-that-get-hung-up-v150).
+11. **Contacts in the physics engine:** see [Cars that lift up or float](#cars-that-lift-up-or-float-v151) and [Putting a car back on the road](#putting-a-car-back-on-the-road-v151).
 
 ## How the HUD moves
 
@@ -200,6 +221,7 @@ To install by hand instead: back up `spel.dat` and `menu.exe`, and follow the st
 - The v1.4.1 countdown was checked in-game by the author, and under Wine with software rendering at 4:3 and 16:9.
 - The v1.5.0 display mode was checked in-game by the author on a Radeon 760M under Windows 10: 165 FPS at the display's normal resolution, up from 51/52. The display mode and the 240 FPS limit also ran under Wine with software rendering.
 - The v1.5.0 check for cars that get hung up was checked in-game by the author, and tested under Wine with software rendering, at 165 and 51 frames per second, with a bot and with test placements on a jump ramp. The numbers are in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#patch-part-11-cars-that-get-hung-up).
+- The v1.5.1 physics engine fix was tested under Wine with software rendering, with a bot on all nine stages and with test placements, and with the stuck car of a test read from the running game. It hasn't been checked on real hardware yet. The numbers are in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#patch-part-12-contacts-that-outlive-their-triangle).
 - Back up your original files before installing.
 - This project does not include original game assets beyond modified configuration/executable patch files.
 - Testing before v1.1.1 was done on Fedora Linux 44, running the game through Wine using DXVK and DgVoodoo in tandem.

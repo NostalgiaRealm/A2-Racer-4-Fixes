@@ -54,6 +54,7 @@ file offset 0x1B3798 -> VA 0x005B3798
 | 9 | Car physics: exact time steps, forces and pushes that follow time instead of frames, working pedals, a 240 FPS limit |
 | 10 | 32-bit display mode from Windows Vista on, not related to the screen shape |
 | 11 | A car that hangs with an axle in the air, or tipped over, goes back on the road |
+| 12 | Contacts in the physics engine end when they leave their triangle at any frame rate, and when an object is moved; the reset cleans up after itself |
 
 ## Patch part 1: display-mode table
 
@@ -428,7 +429,7 @@ A bot driving the player's car along the path of a racer for 110 seconds, with b
 ### What this doesn't establish
 
 - The numbers are from Wine with software rendering, and a held key or a bot. The author checked the result in-game before the release, without these measurements.
-- What lifted cars after these fixes is in [Patch part 11](#patch-part-11-cars-that-get-hung-up). At the time of this part it had not been reproduced by itself. The player's wheels run inside the physics steps, so they don't depend on the frame rate, and a clean clock showed no lifting by itself at any frame rate. What was seen: the frozen and slowed world at a long uptime, and the 8 stops at high frame rates. Nose-up traffic as a ramp under the player's car is inferred, from what it would take for the wheels to lose the road.
+- What lifted cars after these fixes is in [Patch part 12](#patch-part-12-contacts-that-outlive-their-triangle). At the time of this part it had not been reproduced by itself. The player's wheels run inside the physics steps, so they don't depend on the frame rate, and a clean clock showed no lifting by itself at any frame rate. What was seen: the frozen and slowed world at a long uptime, and the 8 stops at high frame rates. Nose-up traffic as a ramp under the player's car is inferred, from what it would take for the wheels to lose the road.
 - The reset can drop a car on top of another car: Enter at the start of a race put the player's car on the roof of a racer, nose up at 0.24 and wheels spinning, where it rode for 35 seconds. That isn't changed, and it looks a lot like a lifted car. `FUN_0040E5A0` puts the car 20 units above a free spot of the road, but not all vehicles count for that check.
 - `FUN_004FC2D0` (the body's counter torque) only runs when braking, so its last value stays until the next brake. It's small: 1600 at full brake, which tilts the car about 1 degree, so it's left as it is.
 - Trailers weren't run. Some objects on the road still throw a car that hits them at speed, like the one near (-15020, 7570), at any frame rate.
@@ -447,13 +448,15 @@ The race, loading screen, countdown, pause and quit screens looked right under W
 
 ## Patch part 11: cars that get hung up
 
+[Patch part 12](#patch-part-12-contacts-that-outlive-their-triangle) found what mostly held these cars up: contacts that had left their triangle. This part explains it with the center of mass, which was too simple, and it didn't free a car held that way. The check is still needed for cars that really get caught.
+
 After parts 8 to 10 a test at 165 FPS on real hardware still showed the player's car with its front wheels lifted, and a racer that floated in the air and did not come back to the road. A run under Wine at 165 FPS caught the same thing. The racer drove up the side of one of the wooden jump ramps at 16 units per second, its y went from 2 to 25 in 1.6 seconds, and it then stayed at the same spot for the last 118 seconds of the run, with its wheels spinning freely at about 62 radians per second.
 
 ### Why a car stays up there
 
 `FUN_00429710` builds these cars, and `FUN_004A14F0` moves the center of mass to the height stored in the object at `+0x78`. In Ipion's coordinates, where y points down, the wheels end up 0.6 to 1.3 units above the center of mass. Measured against the road, the center of mass is below the road surface. That keeps a car from rolling over in corners, but it has side effects:
 
-- A body that lands on an edge has its center of mass under the point it rests on. It swings like a pendulum and doesn't tip off. At one spot the car swung between about 12 and 80 degrees nose up without falling.
+- A body that rests on a point has its center of mass under that point. It swings like a pendulum and doesn't tip off. At one spot the car swung between about 12 and 80 degrees nose up without falling. Part 12 shows that this point was usually not on an edge at all, but past the end of a triangle.
 - Forces at the height of the road or higher pitch the nose up instead of down. That goes for a frontal hit, and for braking.
 
 The game's correction, `FUN_00419450` and its four callers, only reacts to a rotation above 10 radians per second for 0.25 seconds. A car that hangs still never triggers it. Friction contacts read from the physics engine show what is touching:
@@ -468,9 +471,9 @@ pos(-21823.75 1.93 10689.37) up 0.982 forward y 0.191, speed 0
 
 Under that bridge part the car looks lifted, and it can't drive because nothing touches the road.
 
-### This is not about the frame rate
+### At 51 and 165 FPS
 
-These hang-ups happen at 51 FPS as well, at the same spots. Two 900 second runs with the same bot:
+These hang-ups also happen at 51 FPS, at the same spots, so this part concluded that they had nothing to do with the frame rate. That was too quick. Cars that really get caught happen at any frame rate, but [part 12](#patch-part-12-contacts-that-outlive-their-triangle) shows that the contacts that hold a car up past the end of a triangle only happen from 66 FPS on. Two 900 second runs with the same bot:
 
 | | 165 FPS | 51 FPS |
 |---|---|---|
@@ -511,7 +514,7 @@ Two whole races with the bot, with `hung_check`, both up to the finish screen:
 | 165 FPS | 471 s | a racer lying on its side against a canal wall; the player hanging at y = 34 at the end of a ramp; the player again 3 seconds later, see below |
 | 51 FPS | 431 s | nothing |
 
-It moved no car that stood on its wheels, in these races or at the start. The reset itself can put a car on an edge or inside something, because `FUN_0040E5A0` only checks for other vehicles. In the race at 165 FPS the first reset left the player's car at y = 20 with no wheel touching. Without this part a car stays there, even after pressing Enter. `hung_check` tried again after 3 seconds and the game chose the next free spot.
+It moved no car that stood on its wheels, in these races or at the start. The reset itself can put a car on an edge or inside something, because `FUN_0040E5A0` only checks for other vehicles. In the race at 165 FPS the first reset left the player's car at y = 20 with no wheel touching. Without this part a car stays there, even after pressing Enter, which part 12 explains. `hung_check` tried again after 3 seconds and the game chose the next free spot.
 
 ### What this doesn't establish
 
@@ -519,11 +522,136 @@ It moved no car that stood on its wheels, in these races or at the start. The re
 - A car can still hang for those 3 seconds, and a car with both axles on something, like on top of another car or pressed against a wall, doesn't count as hung. Enter still works for those.
 - A frontal hit still lifts the nose, as it follows from where the center of mass is. Moving that would change how every car drives.
 
+## Patch part 12: contacts that outlive their triangle
+
+After part 11 a test at 165 FPS under Wine showed the green car stuck with its rear in the air. `hung_check` fired several times and did not free it. The game could be paused and read as it stood:
+
+```text
+pos(-2767.55 89.90 7140.47) up y 0.902, forward y -0.425, speed 0.47, hung for 1.93 s
+  the road here is flat, at y = 80
+  wheel 0 touches the road under it, wheel 1 touches it without pressure, wheels 2 and 3 touch nothing
+  body touches 'chunk_248', twice, with these points of the body:
+    (-0.99 -1.18 -2.63), the left rear top corner, at (-2761.1 110.9 7161.5), pressure 803
+    ( 0.99 -1.18 -2.63), the right rear top corner, at (-2780.1 112.5 7156.7), pressure 11065
+  both on the triangle (-2310.7 80.0 7027.9) (-2361.6 90.0 7026.2) (-2338.3 80.0 6831.0)
+  that triangle is 422 and 439 units away from those corners, and its plane runs about 60 units above them
+```
+
+So what held the rear of the car up was a contact with a piece of ground far away.
+
+### How a contact ends
+
+The physics engine creates a contact when two objects collide. For a corner of a body on the ground, it holds that corner and a triangle. Each physics step handles it in three stages:
+
+1. `FUN_00505CC0` works out its state, through `FUN_005052D0` for a point on a triangle. The gap is the distance to the plane of the triangle, and a plane has no edges. A negative gap becomes 0, which counts as touching. Whether the corner is still over the triangle is checked by `FUN_005094E0`, but only when the byte at `+0x60` of the contact is 1, and that check clears the byte.
+2. Friction (`FUN_0053FB20`, `FUN_0053E010`) sets that byte when the contact slips further than its friction spring allows. For wheels `FUN_00505CC0` sets it itself, every time.
+3. `FUN_0053FA30` or `FUN_00549940` removes the contact if the check failed, or if the gap is 0.045 or more in the engine's units, a tenth of the game's. Otherwise it pushes (`FUN_0053D370`), with no limit on the push.
+
+So a contact that slides gets its check in the step after it slipped. That was the design.
+
+### Why that stopped working above 66 FPS
+
+The function that drives the player and the racers, `FUN_00428C70`, calls `FUN_004F21E0` at `0x00428ED5`, which calls `FUN_004F3810`. That runs `FUN_00505CC0` on every contact of the car's body, once per frame, and nothing reads the result. It uses up the byte at `+0x60`: if the check fails there nobody hears of it, and the next physics step does no check.
+
+The world steps at a fixed 66 Hz. At 30 frames per second about half of the steps have no frame before them, and those checks count. From 66 frames per second on, a frame falls between any two steps and no check ever counts. Wheels aren't affected, as they set the byte again every time. Traffic doesn't run `FUN_00428C70`.
+
+The measurements below show this directly. With the same bot on the same stage, the code without this part has 0 to 3 such contacts per race up to 60 FPS, and 21 to 30 above 100 FPS.
+
+### What that does to a car
+
+A contact that survives keeps pressing the body against an invisible extension of its triangle. A contact can only push, so the planes that fall away from the car let go by themselves. The ones that last are the ones that rise in front of it. The car climbs them nose first until its front wheels are off the road, and most of the drive is on those wheels. This is the report that started part 9: the front pulls up out of nowhere and the car can't drive any further.
+
+It needs no reset and no hit. In one race at section 238 of etappe 5, at 233 FPS:
+
+```text
+150.08 s  pos(-3445.0 87.9 7744.2)  forward y 0.03  speed 20.5  body on a triangle of chunk_238, 23 units past it, pressure 23524
+151.31 s  pos(-3301.3 99.5 7730.8)  forward y 0.79  speed  3.4  the road is at y = 81 here
+```
+
+The hang-up of part 11 was the same thing. At y = 19 on the side of the ramp the body hangs from a point 10 units past the end of the triangle, with a pressure of about 18000 and one wheel touching. That point is also the pivot of the pendulum that part 11 saw.
+
+### Why a reset didn't help
+
+`FUN_005020A0`, which moves an object, leaves its contacts alone, and it stops the object, so nothing slips and nothing asks for a check, at any frame rate. The contact only ends if the body lands more than 0.045 above the plane. A reset puts the car 20 units above the road, so where the old plane runs higher than that, the contact stays with a gap of 0. The corners stay where they are while the rest of the car falls, which gives the rear in the air. `hung_check` or Enter moves the car to the next spot and the same contact goes along. A contact 60 units below its plane would take about 300 seconds to work its way up and let go.
+
+A race on the v1.5.0 code caught all of this by itself: the player's car ran into a contact 27 units past chunk_188 at 303 s, stood up, and then hung at y = 100 above the road at y = 80, the height of a reset, swinging between forward y 0 and 0.86, for the 112 seconds until the end of the run. The bot pressed Enter 25 times, and `hung_check` fired as well.
+
+### Other things wrong with the reset
+
+Reading `FUN_0040E5A0` for this turned up more, all from the original game, and made worse by `hung_check` calling it more often:
+
+- It sets the waypoint of the car without taking the car off the list of the old one. That waypoint counts the car forever. Lanes look taken for the rest of the race, for other cars and for the next reset, which then moves the car further ahead. Two Enter presses at the start moved the car 128 units ahead each.
+- Every reset of any car sets the time for the 5 second wait of the Enter key. A racer that gets reset every 3 seconds keeps Enter from working at all.
+- Near the end of the track it steps to the next section without wrapping around. When the lanes of the last section look taken, the game stops with the error `Illegal chunk: 327`.
+- It takes the height from the first surface it finds under the lane, with no look at how high that is. At sections 296 and 305 of etappe 5, where the road runs at y = 80 to 100, that is the ground at y = 0, so the car ended up at y = 1 under the road. On etappe 6 the same happens at sections 175, 183, 194 and 244, and on etappe 7 at section 15 it picks the surface at y = 449 above a tunnel, for a road at y = 73. This comes from reading the track files for every lane: only these three stages have it.
+- The move stops the car but not its rotation, and the game's correction for a spinning car (`FUN_00419450`) goes on until the spin stops, so a car can get reset again on the next frames and comes down still turning. In a test with a fast spin the reset fired once or twice, as the spin dies off quickly, so this matters less than the rest.
+
+### The fix
+
+| Hook | Where | What it does |
+|---|---|---|
+| `contact_check` | start of `FUN_00505CC0`, `0x00505CC6` | Sets the byte at `+0x60` on every call, so every contact gets the check on every step, as wheels already did. The game's own removal does the rest |
+| `move_object` | start of `FUN_004F3130`, `0x004F3130`, which all moves of an object go through | Removes the object's contacts with `FUN_004F2910`, the game's own function for when it turns off collisions |
+| `reset_unlink` | before the move in the reset, `0x0040E7C0` | Takes the car off the list of its waypoint with `FUN_004A7020`, as the game's own respawn `FUN_0041CAE0` does |
+| `reset_done` | stores the time of the reset, `0x0040E818` | Only sets that time when the call came from the Enter key, and stops the rotation of the body. The wheels keep theirs, so a reset feels as it did |
+| `reset_next_section`, `reset_previous_section` | step to another section, `0x0040E838` and `0x0040E841` | Wrap around at the ends of the track |
+| `reset_height` | adds 20 to the height, `0x0040E7B6` | When the surface is more than 25 units from the lane's own height, uses the lane's height. Not for a lane marked as not for placing cars (flag 4), where the lane can run far under the road, unless no surface was found at all |
+
+A smaller change was tried as well: putting the byte back after the call in `FUN_004F3810`, which brings back the game's own rule at any frame rate. It measured the same in five races. But in `FUN_0053D590` a slow creep under load rewrites the friction spring without setting the byte, for bodies as well as for wheels, so that rule misses a corner that slowly crawls past the end of a triangle, at any frame rate. Checking every time covers that too. What it costs is a few float operations per contact per step. A body that crosses from one triangle to the next loses its contact and sags about 0.09 units before it collides again, which is what the game always did for a body that slides at low frame rates.
+
+`hung_check` stays. A car can also really get caught, with contacts on what it touches, and that now gets it free, as nothing comes along.
+
+### Measurements
+
+Whole races with the same bot, all five cars on the track scanned every 0.25 seconds. "Past its triangle" means a corner or edge of a body more than 12 units from the triangle or edge of its contact. A race can end early when the bot wrecks its car, as it doesn't avoid anything. Several races ran at once, which is why the frame rates without a limit vary.
+
+| Code | Etappe | Frame rate | Contacts past their triangle, per race | Seconds with a nose above 0.5, all cars together |
+|---|---|---|---|---|
+| v1.5.0 | 5 | 30 | 0, 2, 1 | 1.5, 12.6, 7.2 |
+| v1.5.0 | 5 | 51 | 0, 0, 0 | 2.7, 7.1, 9.5 |
+| v1.5.0 | 5 | 60 | 3 | 14.4 |
+| v1.5.0 | 5 | 114 | 21 | 3.4 |
+| v1.5.0 | 5 | 238 | 26, 26 | 17.8, 83.3 |
+| v1.5.0 | 4 | 137 | 30 | 29.7 |
+| this patch | 5 | 30 | 0 | 9.5 |
+| this patch | 5 | 51 | 0, 0 | 6.2, 11.2 |
+| this patch | 5 | 60 | 0 | 19.5 |
+| this patch | 5 | 122 to 146 | 0, 0, 0 | 10.6, 7.4, 9.7 |
+| this patch | 0, 1, 2, 3, 4, 4, 6, 7, 8 | 101 to 127 | 0 on every one | 7 to 39 |
+
+The contacts tell the story. The time with a nose up mostly comes from hits, which the bot has plenty of: most of what remains is the car running into traffic or riding up onto a truck at full speed, and it says more about the bot than about the physics. The 38 seconds on etappe 4 are its fourth racer, which drives back and forth across the road near the start for the whole race. It does the same on v1.5.0.
+
+Tests with a test build that can place a car, under Wine:
+
+| Test | v1.5.0 | This patch |
+|---|---|---|
+| On its back on a flat bridge deck for 0.4 s, then moved to the spot of the stuck car, three times | Nose down at forward y -0.4, rear in the air, the state of the stuck car. `hung_check` fires and it comes back the same at sections 245 and 244 | Lands flat on all four wheels every time, no `hung_check` |
+| The ramp of part 11, gas held, three drives, without `hung_check` | Hangs at y = 19 on a contact 10 units past its triangle; next caught on a part at y = 15, then on its roof | Drives past the ramp, three times |
+| In those drives, samples of a body contact that presses while more than 1 unit from its triangle | 169 of 732, up to 191 units away | 0 of 323 |
+| Drive through section 247 of etappe 5 with the gas held, where the car stood up nearly vertical | Nearly vertical at y = 105 | Drives on |
+| Enter right after a reset of a racer | Ignored | Works |
+| Waypoint entries of cars that are elsewhere, after 2 resets of the player and 2 of a racer | 4 | 0 |
+| Reset at the last section, with its lanes marked as taken | `Illegal chunk: 327`, the game stops | Lands on section 0, the race goes on. Also in reverse |
+| Reset at sections 296 and 305 of etappe 5 | Lands at y = 1.4 and 0.2, under the road | Lands on the road, at y = 93 and 81 |
+| Reset at section 15 of etappe 7 | Not run; the track file gives y = 449 above the tunnel | Lands at y = 74 |
+| Moving the player on and off moving cars, and resetting it and the racers while touching, 935 times, 126 of them with the body touching something | | No crash and no error |
+| On its roof, pushed sideways across triangles for 5 s, changes in the body's contacts | 15 | 17 |
+
+
+### What this doesn't establish
+
+- The numbers are from Wine with software rendering, a bot and test placements. The stuck car itself ran under Wine at 165 FPS. This part was released before anyone played it on real hardware.
+- How the green car came to touch that triangle isn't known: the game was stopped after it happened. That triangle is about 400 units from the road, and the moves before the pause weren't logged.
+- The frame rates of the PCs of the time aren't known, so why this went unnoticed then is inferred.
+- A frontal hit still lifts the nose, and a car can land on its roof or on another car. These were all seen in the races, with contacts that really touch.
+- A car with both axles on something, like pressed against a wall, still doesn't count as hung. Enter works for those, and racers reverse out by themselves.
+- `hung_check` also runs after the finish and during an arrest, so a car lying on its roof by then gets put back as well.
+
 ## All added and changed bytes
 
 The added code is built from [`A2Racer4Fixes_source/spel_patch.asm`](A2Racer4Fixes_source/spel_patch.asm). It goes in unused space at the end of `.text`, file offset `0x175500`, VA `0x00575500`, and the section's virtual size is raised so that space is certainly mapped. That space must be all zero before patching. A `spel.dat` from v1.2.0 has older code there, so the patcher starts from the copy in `4x3_backup` in that case.
 
-1984 bytes at `0x175500`:
+2264 bytes at `0x175500`:
 
 ```text
 83 7C 24 04 03 75 60 A1 26 B8 73 00 83 F8 FF 74 56 69 C0 B0 00 00 00 03
@@ -540,13 +668,13 @@ B4 B4 73 00 50 8B 08 FF 51 5C 6A 05 6A 19 A1 B4 B4 73 00 50 8B 08 FF 51
 8B 08 FF 51 58 6A 00 6A 0F A1 B4 B4 73 00 50 8B 08 FF 51 5C FF 74 24 14
 FF 74 24 14 FF 74 24 14 FF 74 24 14 8B 04 24 8B 08 FF 51 30 5A 50 52 6A
 0F A1 B4 B4 73 00 50 8B 08 FF 51 5C 58 C2 10 00 8B 44 24 04 8B 08 FF 61
-30 60 68 F8 5B 57 00 FF 15 A0 60 57 00 89 C6 85 F6 74 12 68 18 5C 57 00
-56 FF 15 FC 60 57 00 85 C0 74 02 FF D0 8B 1D C0 5C 57 00 8B 2D C4 5C 57
+30 60 68 0D 5D 57 00 FF 15 A0 60 57 00 89 C6 85 F6 74 12 68 2D 5D 57 00
+56 FF 15 FC 60 57 00 85 C0 74 02 FF D0 8B 1D D8 5D 57 00 8B 2D DC 5D 57
 00 85 DB 75 61 81 EC 9C 00 00 00 89 E7 B9 27 00 00 00 31 C0 F3 AB 66 C7
-44 24 24 9C 00 85 F6 74 2B 68 03 5C 57 00 56 FF 15 FC 60 57 00 85 C0 74
+44 24 24 9C 00 85 F6 74 2B 68 18 5D 57 00 56 FF 15 FC 60 57 00 85 C0 74
 1B 54 6A FF 6A 00 FF D0 85 C0 74 10 8B 5C 24 6C 8B 6C 24 70 85 DB 74 04
 85 ED 75 14 6A 00 FF 15 F4 61 57 00 89 C3 6A 01 FF 15 F4 61 57 00 89 C5
-81 C4 9C 00 00 00 BE 90 5C 57 00 B9 0C 00 00 00 AD 89 18 89 68 04 E2 F8
+81 C4 9C 00 00 00 BE A8 5D 57 00 B9 0C 00 00 00 AD 89 18 89 68 04 E2 F8
 8D 04 AD 01 00 00 00 31 D2 B9 03 00 00 00 F7 F1 A3 38 1F 75 00 61 E9 CD
 29 EE FF 50 A1 98 37 5B 00 8D 04 40 50 DB 04 24 A1 9C 37 5B 00 C1 E0 02
 89 04 24 DA 34 24 58 D9 C0 D9 E0 D9 5E 14 DC C0 D9 5E 1C 58 C3 FF 74 24
@@ -555,11 +683,11 @@ FF 74 24 14 FF 74 24 14 FF 74 24 14 8B 04 24 8B 08 FF 51 30 5A 50 52 6A
 C1 50 DB 04 24 58 8B 4C 24 10 D8 01 D9 19 58 C2 0C 00 A1 98 37 5B 00 8D
 04 40 8B 0D 9C 37 5B 00 8D 14 8D 00 00 00 00 29 D0 69 C0 40 1F 00 00 6B
 C9 63 89 CA D1 EA 85 C0 79 02 F7 DA 01 D0 99 F7 F9 C3 56 57 89 C6 83 EC
-40 89 E2 6A 40 52 68 34 A0 5A 00 56 E8 47 E5 F4 FF 83 C4 10 89 E0 BF 2B
-5C 57 00 E8 6A 00 00 00 74 58 89 F0 BF 44 5C 57 00 E8 5C 00 00 00 74 4A
-89 F0 BF 5B 5C 57 00 E8 4E 00 00 00 74 3C 89 F0 BF 6A 5C 57 00 E8 40 00
-00 00 74 2E 89 E0 BF 37 5C 57 00 E8 32 00 00 00 74 27 89 F0 BF 79 5C 57
-00 E8 2F 00 00 00 74 19 89 F0 BF 88 5C 57 00 E8 21 00 00 00 74 0B 31 C0
+40 89 E2 6A 40 52 68 34 A0 5A 00 56 E8 47 E5 F4 FF 83 C4 10 89 E0 BF 40
+5D 57 00 E8 6A 00 00 00 74 58 89 F0 BF 59 5D 57 00 E8 5C 00 00 00 74 4A
+89 F0 BF 70 5D 57 00 E8 4E 00 00 00 74 3C 89 F0 BF 7F 5D 57 00 E8 40 00
+00 00 74 2E 89 E0 BF 4C 5D 57 00 E8 32 00 00 00 74 27 89 F0 BF 8E 5D 57
+00 E8 2F 00 00 00 74 19 89 F0 BF 9D 5D 57 00 E8 21 00 00 00 74 0B 31 C0
 EB 0A B8 01 00 00 00 EB 03 83 C8 FF 83 C4 40 5F 5E C3 E8 06 00 00 00 75
 03 80 38 00 C3 57 8A 0F 84 C9 74 17 8A 28 80 FD 61 72 08 80 FD 7A 77 03
 80 ED 20 38 CD 75 04 40 47 EB E3 5F C3 56 8B 74 24 0C FF 15 AC 60 57 00
@@ -574,7 +702,7 @@ A3 18 1F 75 00 C7 05 1C 1F 75 00 01 00 00 00 2B 05 18 1F 75 00 C3 D9 C0
 DC 25 20 1F 75 00 D8 76 04 D9 5E 0C DD 15 20 1F 75 00 D8 76 04 D9 5E 08
 C3 D9 44 24 04 8B 44 24 04 89 41 78 DC 05 28 1F 75 00 DD 15 28 1F 75 00
 D9 51 74 83 EC 08 DD 1C 24 8B 49 14 B8 80 83 4F 00 FF D0 C2 04 00 50 51
-B9 B0 28 71 00 B8 00 68 4A 00 FF D0 D8 0D E4 5B 57 00 D9 E8 D8 D1 DF E0
+B9 B0 28 71 00 B8 00 68 4A 00 FF D0 D8 0D F5 5C 57 00 D9 E8 D8 D1 DF E0
 9E 73 02 D9 C9 DD D8 59 58 C3 D8 3D 18 63 57 00 E8 D1 FF FF FF DE C9 C3
 E8 C9 FF FF FF D9 C0 D8 4C 24 04 D9 5C 24 04 D9 C0 D8 4C 24 08 D9 5C 24
 08 D8 4C 24 0C D9 5C 24 0C 56 89 CE 8B 46 10 68 F6 97 4A 00 C3 89 44 24
@@ -591,27 +719,39 @@ C3 FF 15 AC 60 57 00 8B 15 A0 37 5B 00 83 FA 10 75 09 3C 06 72 05 BA 20
 40 09 C2 41 83 F9 04 72 E6 89 D7 89 E8 2D 7C EA 5C 00 31 D2 B9 94 02 00
 00 F7 F1 83 F8 13 72 05 B8 13 00 00 00 8D 34 85 40 1F 75 00 8B 0D 50 5E
 71 00 01 D9 D9 81 BC 00 00 00 DC C8 D9 81 C0 00 00 00 DC C8 DE C1 D9 81
-C4 00 00 00 DC C8 DE C1 D8 1D EC 5B 57 00 DF E0 9E 73 5F 83 FF 03 75 1D
-8B 41 24 69 C0 A9 00 00 00 03 05 D0 B0 73 00 D9 40 24 D8 1D F0 5B 57 00
-DF E0 9E 73 3D B9 B0 28 71 00 B8 00 68 4A 00 FF D0 D8 06 D9 16 D8 1D F4
-5B 57 00 DF E0 9E 72 28 6A 00 8B 0D 50 5E 71 00 FF 74 19 34 89 D8 31 D2
+C4 00 00 00 DC C8 DE C1 D8 1D FD 5C 57 00 DF E0 9E 73 5F 83 FF 03 75 1D
+8B 41 24 69 C0 A9 00 00 00 03 05 D0 B0 73 00 D9 40 24 D8 1D 01 5D 57 00
+DF E0 9E 73 3D B9 B0 28 71 00 B8 00 68 4A 00 FF D0 D8 06 D9 16 D8 1D 05
+5D 57 00 DF E0 9E 72 28 6A 00 8B 0D 50 5E 71 00 FF 74 19 34 89 D8 31 D2
 B9 F0 00 00 00 F7 F1 50 B8 A0 E5 40 00 FF D0 83 C4 0C C7 06 00 00 00 00
-61 C2 04 00 83 39 00 74 46 51 83 EC 08 54 FF 15 58 60 57 00 8B 4C 24 08
-DF 2C 24 DF 2D 00 1F 75 00 DE E9 D8 71 04 D8 1D E8 5B 57 00 DF E0 9E 73
-11 A1 00 1F 75 00 0B 05 04 1F 75 00 74 04 F3 90 EB CB 58 A3 00 1F 75 00
-58 A3 04 1F 75 00 59 E9 1C 0B F3 FF 00 00 C8 41 89 88 88 3B 00 00 10 40
-00 00 00 3F 00 00 40 40 55 53 45 52 33 32 2E 44 4C 4C 00 45 6E 75 6D 44
-69 73 70 6C 61 79 53 65 74 74 69 6E 67 73 41 00 53 65 74 50 72 6F 63 65
-73 73 44 50 49 41 77 61 72 65 00 53 50 45 45 44 4F 4D 45 54 45 52 00 43
-4F 4D 4D 55 4E 49 43 41 54 4F 52 00 53 54 52 49 4E 47 5F 52 41 43 45 5F
-54 49 4D 45 5F 56 41 4C 55 45 00 53 54 52 49 4E 47 5F 43 55 52 5F 4C 41
-50 00 53 54 52 49 4E 47 5F 43 55 52 5F 50 4F 53 00 4F 56 4C 5F 50 4F 52
-54 52 41 49 54 53 5F 00 50 4C 41 59 45 52 5F 00 98 37 5B 00 EC 37 5B 00
-00 38 5B 00 14 38 5B 00 64 38 5B 00 78 38 5B 00 8C 38 5B 00 A0 38 5B 00
-B4 38 5B 00 04 39 5B 00 18 39 5B 00 2C 39 5B 00
+61 C2 04 00 C6 41 60 01 81 EC B0 00 00 00 E9 29 01 F9 FF 51 6A 01 B8 10
+29 4F 00 FF D0 59 81 EC D8 00 00 00 E9 7D D5 F7 FF D9 C0 D8 64 24 40 D9
+E1 D8 1D 09 5D 57 00 DF E0 9E 76 21 D9 EE D8 D9 DF E0 9E 74 12 8B 44 24
+6C 6B C0 50 03 05 B8 5E 71 00 F6 00 04 75 06 DD D8 D9 44 24 40 D8 05 10
+63 57 00 C3 52 8B 44 3A 3C 85 C0 78 1E 3B 05 BC 5E 71 00 7F 16 89 F8 31
+D2 B9 F0 00 00 00 F7 F1 50 B8 20 70 4A 00 FF D0 83 C4 04 5A 8B 4C 3A 10
+8D 54 24 48 C3 A1 50 5E 71 00 8B 44 38 10 8B 40 08 8B 80 A4 00 00 00 31
+D2 89 90 94 00 00 00 89 90 98 00 00 00 89 90 9C 00 00 00 89 50 74 89 50
+78 89 50 7C 89 90 84 00 00 00 89 90 88 00 00 00 89 90 8C 00 00 00 81 7C
+24 60 0A D7 44 00 75 07 D9 1D 00 1B 5D 00 C3 DD D8 C3 46 81 C5 94 09 00
+00 3B 35 04 5F 71 00 7C 04 31 F6 31 ED C3 4E 81 ED 94 09 00 00 79 0D 8B
+35 04 5F 71 00 4E 69 EE 94 09 00 00 C3 83 39 00 74 46 51 83 EC 08 54 FF
+15 58 60 57 00 8B 4C 24 08 DF 2C 24 DF 2D 00 1F 75 00 DE E9 D8 71 04 D8
+1D F9 5C 57 00 DF E0 9E 73 11 A1 00 1F 75 00 0B 05 04 1F 75 00 74 04 F3
+90 EB CB 58 A3 00 1F 75 00 58 A3 04 1F 75 00 59 E9 0B 0A F3 FF 00 00 C8
+41 89 88 88 3B 00 00 10 40 00 00 00 3F 00 00 40 40 00 00 C8 41 55 53 45
+52 33 32 2E 44 4C 4C 00 45 6E 75 6D 44 69 73 70 6C 61 79 53 65 74 74 69
+6E 67 73 41 00 53 65 74 50 72 6F 63 65 73 73 44 50 49 41 77 61 72 65 00
+53 50 45 45 44 4F 4D 45 54 45 52 00 43 4F 4D 4D 55 4E 49 43 41 54 4F 52
+00 53 54 52 49 4E 47 5F 52 41 43 45 5F 54 49 4D 45 5F 56 41 4C 55 45 00
+53 54 52 49 4E 47 5F 43 55 52 5F 4C 41 50 00 53 54 52 49 4E 47 5F 43 55
+52 5F 50 4F 53 00 4F 56 4C 5F 50 4F 52 54 52 41 49 54 53 5F 00 50 4C 41
+59 45 52 5F 00 90 90 90 98 37 5B 00 EC 37 5B 00 00 38 5B 00 14 38 5B 00
+64 38 5B 00 78 38 5B 00 8C 38 5B 00 A0 38 5B 00 B4 38 5B 00 04 39 5B 00
+18 39 5B 00 2C 39 5B 00
 ```
 
-After it, at `0x175CC0`, come two 32-bit values: a fixed width and height, or `0` and `0` to follow the display.
+After it, at `0x175DD8`, come two 32-bit values: a fixed width and height, or `0` and `0` to follow the display.
 
 | File offset | Original | Patched | What |
 |---|---|---|---|
@@ -647,7 +787,7 @@ After it, at `0x175CC0`, come two 32-bit values: a fixed width and height, or `0
 | `0x0A6850` | `FF 15 58 60 57 00` | `E8 70 F0 0C 00 90` | timer counter |
 | `0x0A673B` | `FF 15 50 62 57 00` | `E8 D1 F1 0C 00 90` | timer ticks |
 | `0x0A687E` | `FF 15 50 62 57 00` | `E8 8E F0 0C 00 90` | timer ticks |
-| `0x04CB9E` | `E8 5D 9B 05 00` | `E8 F1 8F 12 00` | frame limit |
+| `0x04CB9E` | `E8 5D 9B 05 00` | `E8 02 91 12 00` | frame limit |
 | `0x0A6751` | `D8 76 04 D9 C0 D8 66` | `E8 E0 F1 0C 00 EB 07` | timer step |
 | `0x0A6894` | `D8 76 04 D9 C0 D8 66` | `E8 9D F0 0C 00 EB 07` | timer step |
 | `0x0A45D0` | `D9 44 24 04 D8` | `E9 7C 13 0D 00` | world time |
@@ -665,6 +805,13 @@ After it, at `0x175CC0`, come two 32-bit values: a fixed width and height, or `0
 | `0x0C58AB` | `8B 15 A0 37 5B 00` | `E8 A9 01 0B 00 90` | display depth |
 | `0x0C03C0` | `E8 EB 7D 00 00 83 C4` | `E8 AF 56 0B 00 EB 07` | image pixel |
 | `0x028F30` | `E8 3B A2 FD FF` | `E8 76 CB 14 00` | hung car |
+| `0x105CC6` | `81 EC B0 00 00 00` | `E9 C9 FE 06 00 90` | contact check |
+| `0x0F3130` | `81 EC D8 00 00 00` | `E9 6E 2A 08 00 90` | object move |
+| `0x00E7C0` | `8B 4C 17 10 8D 54 24 44` | `E8 2F 74 16 00 90 90 90` | reset waypoint |
+| `0x00E818` | `D9 1D 00 1B 5D 00` | `E8 08 74 16 00 90` | reset time and rotation |
+| `0x00E838` | `46 81 C5 94 09 00 00` | `E8 3D 74 16 00 90 90` | reset next section |
+| `0x00E841` | `4E 81 ED 94 09 00 00` | `E8 48 74 16 00 90 90` | reset previous section |
+| `0x00E7B6` | `D8 05 10 63 57 00` | `E8 FE 73 16 00 90` | reset height |
 | `0x000248` | `08 44 1C 00` | `00 50 1C 00` | data section size |
 | `0x0001F8` | `4A 44 17 00` | `00 50 17 00` | code section size |
 | `0x0CD478` | `68 70` | `EB B6` | CD check |
@@ -853,13 +1000,13 @@ B4 B4 73 00 50 8B 08 FF 51 5C 6A 05 6A 19 A1 B4 B4 73 00 50 8B 08 FF 51
 8B 08 FF 51 58 6A 00 6A 0F A1 B4 B4 73 00 50 8B 08 FF 51 5C FF 74 24 14
 FF 74 24 14 FF 74 24 14 FF 74 24 14 8B 04 24 8B 08 FF 51 30 5A 50 52 6A
 0F A1 B4 B4 73 00 50 8B 08 FF 51 5C 58 C2 10 00 8B 44 24 04 8B 08 FF 61
-30 60 68 F8 5B 57 00 FF 15 A0 60 57 00 89 C6 85 F6 74 12 68 18 5C 57 00
-56 FF 15 FC 60 57 00 85 C0 74 02 FF D0 8B 1D C0 5C 57 00 8B 2D C4 5C 57
+30 60 68 0D 5D 57 00 FF 15 A0 60 57 00 89 C6 85 F6 74 12 68 2D 5D 57 00
+56 FF 15 FC 60 57 00 85 C0 74 02 FF D0 8B 1D D8 5D 57 00 8B 2D DC 5D 57
 00 85 DB 75 61 81 EC 9C 00 00 00 89 E7 B9 27 00 00 00 31 C0 F3 AB 66 C7
-44 24 24 9C 00 85 F6 74 2B 68 03 5C 57 00 56 FF 15 FC 60 57 00 85 C0 74
+44 24 24 9C 00 85 F6 74 2B 68 18 5D 57 00 56 FF 15 FC 60 57 00 85 C0 74
 1B 54 6A FF 6A 00 FF D0 85 C0 74 10 8B 5C 24 6C 8B 6C 24 70 85 DB 74 04
 85 ED 75 14 6A 00 FF 15 F4 61 57 00 89 C3 6A 01 FF 15 F4 61 57 00 89 C5
-81 C4 9C 00 00 00 BE 90 5C 57 00 B9 0C 00 00 00 AD 89 18 89 68 04 E2 F8
+81 C4 9C 00 00 00 BE A8 5D 57 00 B9 0C 00 00 00 AD 89 18 89 68 04 E2 F8
 8D 04 AD 01 00 00 00 31 D2 B9 03 00 00 00 F7 F1 A3 38 1F 75 00 61 E9 CD
 29 EE FF 50 A1 98 37 5B 00 8D 04 40 50 DB 04 24 A1 9C 37 5B 00 C1 E0 02
 89 04 24 DA 34 24 58 D9 C0 D9 E0 D9 5E 14 DC C0 D9 5E 1C 58 C3 FF 74 24
@@ -868,11 +1015,11 @@ FF 74 24 14 FF 74 24 14 FF 74 24 14 8B 04 24 8B 08 FF 51 30 5A 50 52 6A
 C1 50 DB 04 24 58 8B 4C 24 10 D8 01 D9 19 58 C2 0C 00 A1 98 37 5B 00 8D
 04 40 8B 0D 9C 37 5B 00 8D 14 8D 00 00 00 00 29 D0 69 C0 40 1F 00 00 6B
 C9 63 89 CA D1 EA 85 C0 79 02 F7 DA 01 D0 99 F7 F9 C3 56 57 89 C6 83 EC
-40 89 E2 6A 40 52 68 34 A0 5A 00 56 E8 47 E5 F4 FF 83 C4 10 89 E0 BF 2B
-5C 57 00 E8 6A 00 00 00 74 58 89 F0 BF 44 5C 57 00 E8 5C 00 00 00 74 4A
-89 F0 BF 5B 5C 57 00 E8 4E 00 00 00 74 3C 89 F0 BF 6A 5C 57 00 E8 40 00
-00 00 74 2E 89 E0 BF 37 5C 57 00 E8 32 00 00 00 74 27 89 F0 BF 79 5C 57
-00 E8 2F 00 00 00 74 19 89 F0 BF 88 5C 57 00 E8 21 00 00 00 74 0B 31 C0
+40 89 E2 6A 40 52 68 34 A0 5A 00 56 E8 47 E5 F4 FF 83 C4 10 89 E0 BF 40
+5D 57 00 E8 6A 00 00 00 74 58 89 F0 BF 59 5D 57 00 E8 5C 00 00 00 74 4A
+89 F0 BF 70 5D 57 00 E8 4E 00 00 00 74 3C 89 F0 BF 7F 5D 57 00 E8 40 00
+00 00 74 2E 89 E0 BF 4C 5D 57 00 E8 32 00 00 00 74 27 89 F0 BF 8E 5D 57
+00 E8 2F 00 00 00 74 19 89 F0 BF 9D 5D 57 00 E8 21 00 00 00 74 0B 31 C0
 EB 0A B8 01 00 00 00 EB 03 83 C8 FF 83 C4 40 5F 5E C3 E8 06 00 00 00 75
 03 80 38 00 C3 57 8A 0F 84 C9 74 17 8A 28 80 FD 61 72 08 80 FD 7A 77 03
 80 ED 20 38 CD 75 04 40 47 EB E3 5F C3 56 8B 74 24 0C FF 15 AC 60 57 00
@@ -887,7 +1034,7 @@ A3 18 1F 75 00 C7 05 1C 1F 75 00 01 00 00 00 2B 05 18 1F 75 00 C3 D9 C0
 DC 25 20 1F 75 00 D8 76 04 D9 5E 0C DD 15 20 1F 75 00 D8 76 04 D9 5E 08
 C3 D9 44 24 04 8B 44 24 04 89 41 78 DC 05 28 1F 75 00 DD 15 28 1F 75 00
 D9 51 74 83 EC 08 DD 1C 24 8B 49 14 B8 80 83 4F 00 FF D0 C2 04 00 50 51
-B9 B0 28 71 00 B8 00 68 4A 00 FF D0 D8 0D E4 5B 57 00 D9 E8 D8 D1 DF E0
+B9 B0 28 71 00 B8 00 68 4A 00 FF D0 D8 0D F5 5C 57 00 D9 E8 D8 D1 DF E0
 9E 73 02 D9 C9 DD D8 59 58 C3 D8 3D 18 63 57 00 E8 D1 FF FF FF DE C9 C3
 E8 C9 FF FF FF D9 C0 D8 4C 24 04 D9 5C 24 04 D9 C0 D8 4C 24 08 D9 5C 24
 08 D8 4C 24 0C D9 5C 24 0C 56 89 CE 8B 46 10 68 F6 97 4A 00 C3 89 44 24
@@ -904,24 +1051,36 @@ C3 FF 15 AC 60 57 00 8B 15 A0 37 5B 00 83 FA 10 75 09 3C 06 72 05 BA 20
 40 09 C2 41 83 F9 04 72 E6 89 D7 89 E8 2D 7C EA 5C 00 31 D2 B9 94 02 00
 00 F7 F1 83 F8 13 72 05 B8 13 00 00 00 8D 34 85 40 1F 75 00 8B 0D 50 5E
 71 00 01 D9 D9 81 BC 00 00 00 DC C8 D9 81 C0 00 00 00 DC C8 DE C1 D9 81
-C4 00 00 00 DC C8 DE C1 D8 1D EC 5B 57 00 DF E0 9E 73 5F 83 FF 03 75 1D
-8B 41 24 69 C0 A9 00 00 00 03 05 D0 B0 73 00 D9 40 24 D8 1D F0 5B 57 00
-DF E0 9E 73 3D B9 B0 28 71 00 B8 00 68 4A 00 FF D0 D8 06 D9 16 D8 1D F4
-5B 57 00 DF E0 9E 72 28 6A 00 8B 0D 50 5E 71 00 FF 74 19 34 89 D8 31 D2
+C4 00 00 00 DC C8 DE C1 D8 1D FD 5C 57 00 DF E0 9E 73 5F 83 FF 03 75 1D
+8B 41 24 69 C0 A9 00 00 00 03 05 D0 B0 73 00 D9 40 24 D8 1D 01 5D 57 00
+DF E0 9E 73 3D B9 B0 28 71 00 B8 00 68 4A 00 FF D0 D8 06 D9 16 D8 1D 05
+5D 57 00 DF E0 9E 72 28 6A 00 8B 0D 50 5E 71 00 FF 74 19 34 89 D8 31 D2
 B9 F0 00 00 00 F7 F1 50 B8 A0 E5 40 00 FF D0 83 C4 0C C7 06 00 00 00 00
-61 C2 04 00 83 39 00 74 46 51 83 EC 08 54 FF 15 58 60 57 00 8B 4C 24 08
-DF 2C 24 DF 2D 00 1F 75 00 DE E9 D8 71 04 D8 1D E8 5B 57 00 DF E0 9E 73
-11 A1 00 1F 75 00 0B 05 04 1F 75 00 74 04 F3 90 EB CB 58 A3 00 1F 75 00
-58 A3 04 1F 75 00 59 E9 1C 0B F3 FF 00 00 C8 41 89 88 88 3B 00 00 10 40
-00 00 00 3F 00 00 40 40 55 53 45 52 33 32 2E 44 4C 4C 00 45 6E 75 6D 44
-69 73 70 6C 61 79 53 65 74 74 69 6E 67 73 41 00 53 65 74 50 72 6F 63 65
-73 73 44 50 49 41 77 61 72 65 00 53 50 45 45 44 4F 4D 45 54 45 52 00 43
-4F 4D 4D 55 4E 49 43 41 54 4F 52 00 53 54 52 49 4E 47 5F 52 41 43 45 5F
-54 49 4D 45 5F 56 41 4C 55 45 00 53 54 52 49 4E 47 5F 43 55 52 5F 4C 41
-50 00 53 54 52 49 4E 47 5F 43 55 52 5F 50 4F 53 00 4F 56 4C 5F 50 4F 52
-54 52 41 49 54 53 5F 00 50 4C 41 59 45 52 5F 00 98 37 5B 00 EC 37 5B 00
-00 38 5B 00 14 38 5B 00 64 38 5B 00 78 38 5B 00 8C 38 5B 00 A0 38 5B 00
-B4 38 5B 00 04 39 5B 00 18 39 5B 00 2C 39 5B 00
+61 C2 04 00 C6 41 60 01 81 EC B0 00 00 00 E9 29 01 F9 FF 51 6A 01 B8 10
+29 4F 00 FF D0 59 81 EC D8 00 00 00 E9 7D D5 F7 FF D9 C0 D8 64 24 40 D9
+E1 D8 1D 09 5D 57 00 DF E0 9E 76 21 D9 EE D8 D9 DF E0 9E 74 12 8B 44 24
+6C 6B C0 50 03 05 B8 5E 71 00 F6 00 04 75 06 DD D8 D9 44 24 40 D8 05 10
+63 57 00 C3 52 8B 44 3A 3C 85 C0 78 1E 3B 05 BC 5E 71 00 7F 16 89 F8 31
+D2 B9 F0 00 00 00 F7 F1 50 B8 20 70 4A 00 FF D0 83 C4 04 5A 8B 4C 3A 10
+8D 54 24 48 C3 A1 50 5E 71 00 8B 44 38 10 8B 40 08 8B 80 A4 00 00 00 31
+D2 89 90 94 00 00 00 89 90 98 00 00 00 89 90 9C 00 00 00 89 50 74 89 50
+78 89 50 7C 89 90 84 00 00 00 89 90 88 00 00 00 89 90 8C 00 00 00 81 7C
+24 60 0A D7 44 00 75 07 D9 1D 00 1B 5D 00 C3 DD D8 C3 46 81 C5 94 09 00
+00 3B 35 04 5F 71 00 7C 04 31 F6 31 ED C3 4E 81 ED 94 09 00 00 79 0D 8B
+35 04 5F 71 00 4E 69 EE 94 09 00 00 C3 83 39 00 74 46 51 83 EC 08 54 FF
+15 58 60 57 00 8B 4C 24 08 DF 2C 24 DF 2D 00 1F 75 00 DE E9 D8 71 04 D8
+1D F9 5C 57 00 DF E0 9E 73 11 A1 00 1F 75 00 0B 05 04 1F 75 00 74 04 F3
+90 EB CB 58 A3 00 1F 75 00 58 A3 04 1F 75 00 59 E9 0B 0A F3 FF 00 00 C8
+41 89 88 88 3B 00 00 10 40 00 00 00 3F 00 00 40 40 00 00 C8 41 55 53 45
+52 33 32 2E 44 4C 4C 00 45 6E 75 6D 44 69 73 70 6C 61 79 53 65 74 74 69
+6E 67 73 41 00 53 65 74 50 72 6F 63 65 73 73 44 50 49 41 77 61 72 65 00
+53 50 45 45 44 4F 4D 45 54 45 52 00 43 4F 4D 4D 55 4E 49 43 41 54 4F 52
+00 53 54 52 49 4E 47 5F 52 41 43 45 5F 54 49 4D 45 5F 56 41 4C 55 45 00
+53 54 52 49 4E 47 5F 43 55 52 5F 4C 41 50 00 53 54 52 49 4E 47 5F 43 55
+52 5F 50 4F 53 00 4F 56 4C 5F 50 4F 52 54 52 41 49 54 53 5F 00 50 4C 41
+59 45 52 5F 00 90 90 90 98 37 5B 00 EC 37 5B 00 00 38 5B 00 14 38 5B 00
+64 38 5B 00 78 38 5B 00 8C 38 5B 00 A0 38 5B 00 B4 38 5B 00 04 39 5B 00
+18 39 5B 00 2C 39 5B 00
 """)
 if data[CODE_OFFSET:CODE_OFFSET + len(CODE)] not in (bytes(len(CODE)), CODE):
     raise RuntimeError("Unexpected bytes where the code goes. Wrong executable version?")
@@ -962,7 +1121,7 @@ for offset, old, new in [
     (0x0A6850, "FF 15 58 60 57 00", "E8 70 F0 0C 00 90"),
     (0x0A673B, "FF 15 50 62 57 00", "E8 D1 F1 0C 00 90"),
     (0x0A687E, "FF 15 50 62 57 00", "E8 8E F0 0C 00 90"),
-    (0x04CB9E, "E8 5D 9B 05 00", "E8 F1 8F 12 00"),
+    (0x04CB9E, "E8 5D 9B 05 00", "E8 02 91 12 00"),
     (0x0A6751, "D8 76 04 D9 C0 D8 66", "E8 E0 F1 0C 00 EB 07"),
     (0x0A6894, "D8 76 04 D9 C0 D8 66", "E8 9D F0 0C 00 EB 07"),
     (0x0A45D0, "D9 44 24 04 D8", "E9 7C 13 0D 00"),
@@ -980,6 +1139,13 @@ for offset, old, new in [
     (0x0C58AB, "8B 15 A0 37 5B 00", "E8 A9 01 0B 00 90"),
     (0x0C03C0, "E8 EB 7D 00 00 83 C4", "E8 AF 56 0B 00 EB 07"),
     (0x028F30, "E8 3B A2 FD FF", "E8 76 CB 14 00"),
+    (0x105CC6, "81 EC B0 00 00 00", "E9 C9 FE 06 00 90"),
+    (0x0F3130, "81 EC D8 00 00 00", "E9 6E 2A 08 00 90"),
+    (0x00E7C0, "8B 4C 17 10 8D 54 24 44", "E8 2F 74 16 00 90 90 90"),
+    (0x00E818, "D9 1D 00 1B 5D 00", "E8 08 74 16 00 90"),
+    (0x00E838, "46 81 C5 94 09 00 00", "E8 3D 74 16 00 90 90"),
+    (0x00E841, "4E 81 ED 94 09 00 00", "E8 48 74 16 00 90 90"),
+    (0x00E7B6, "D8 05 10 63 57 00", "E8 FE 73 16 00 90"),
     (0x000248, "08 44 1C 00", "00 50 1C 00"),
     (0x0001F8, "4A 44 17 00", "00 50 17 00"),
     (0x0CD478, "68 70", "EB B6"),
@@ -1085,7 +1251,7 @@ The display's current resolution is not available at 32-bit color, or at 16-bit 
 
 ### Cars lift up or lose all speed
 
-Check the rows for the timer, the world time, the traffic mass, the driving force, the pedals and the hung car in [All added and changed bytes](#all-added-and-changed-bytes). See [Patch part 9](#patch-part-9-car-physics) and [Patch part 11](#patch-part-11-cars-that-get-hung-up). A collision can still throw a car, and the Enter reset can drop your car on top of another one.
+Check the rows for the timer, the world time, the traffic mass, the driving force, the pedals, the hung car, the contact check and the object move in [All added and changed bytes](#all-added-and-changed-bytes). See [Patch part 12](#patch-part-12-contacts-that-outlive-their-triangle), [Patch part 9](#patch-part-9-car-physics) and [Patch part 11](#patch-part-11-cars-that-get-hung-up). A collision can still throw a car, and the Enter reset can drop your car on top of another one.
 
 ### The countdown before the race is missing
 

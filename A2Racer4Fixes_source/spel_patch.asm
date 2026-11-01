@@ -68,6 +68,17 @@ RACER_CONTROLS    equ 0x5cea7c          ; the controls of the first racer
 RACER_CONTROLS_SIZE equ 0x294
 CAR_TABLE         equ 0x715e50
 OBJECT_TABLE      equ 0x73b0d0
+CONTACT_RECHECK   equ 0x60              ; byte in a contact: is it still over its triangle?
+CONTACT_STATE_CONTINUE equ 0x505ccc
+REMOVE_CONTACTS   equ 0x4f2910          ; ecx = object, 1 on the stack
+MOVE_OBJECT_CONTINUE equ 0x4f3136
+WAYPOINT_UNLINK   equ 0x4a7020          ; car; takes it off the list of the waypoint it is on
+WAYPOINT_TABLE    equ 0x715eb8
+WAYPOINT_COUNT    equ 0x715ebc
+RESET_HEIGHT      equ 0x576310          ; float 20, how high above the road the reset puts a car
+SECTION_COUNT     equ 0x715f04
+RESET_STAMP       equ 0x5d1b00          ; float, when the last reset took place
+ENTER_RESET_RETURN equ 0x44d70a         ; where the Enter key's call of the reset returns
 
 ; Free memory after the game's data, in the last page of its data section.
 LAST_FRAME   equ 0x751f00               ; counter at the start of the last frame
@@ -812,6 +823,144 @@ hung_check:
     popad
     ret 4
 
+; Jumps here from the start of FUN_00505CC0, with the contact in ecx. That function works out the
+; state of a contact on each physics step. For a corner of a body on a triangle the gap it uses is the
+; distance to the plane of that triangle, which has no edges, and whether the corner is still over the
+; triangle only gets checked when a byte in the contact asks for it. Friction sets that byte when a
+; contact slips. But the driving code calls FUN_004F3810 once per frame for the body of the player and
+; the racers, which runs this function, uses up the byte and ignores the answer. So with a frame
+; between every two physics steps, from 66 frames per second on, no check ever counted. A body that
+; had moved past a triangle kept pressing against its plane, as if on an invisible ramp. It lets go
+; when it moves away from the plane, so the ones that last are the planes that rise in front of the
+; car: it climbs them nose first until its front wheels are off the road. A slow creep under load
+; doesn't set the byte either, at any frame rate. Ask for the check every time, as for the wheels.
+contact_check:
+    mov byte [ecx+CONTACT_RECHECK], 1
+    sub esp, 0xb0
+    jmp CONTACT_STATE_CONTINUE
+
+; Jumps here from the start of FUN_004F3130, which moves an object to another place, with the object
+; in ecx. It left the contacts of the object as they were, and a move doesn't count as slipping, so
+; nothing checked them. A car put back on the road could end up under the plane of a triangle it
+; touched before, with a gap of 0, and hang from it with the rest of the car on the road.
+move_object:
+    push ecx
+    push 1
+    mov eax, REMOVE_CONTACTS
+    call eax
+    pop ecx
+    sub esp, 0xd8
+    jmp MOVE_OBJECT_CONTINUE
+
+; Replaces adding 20 to the height of the ground in the reset, FUN_0040E5A0, with that height in st0,
+; the height of the lane at [esp+0x40] and its waypoint at [esp+0x6c]. The ground comes from the first
+; surface found under the lane, with no look at how high that is. On a road high above the ground, as
+; at sections 296 and 305 of the sixth stage, that put a car under the road. Believe the lane when the
+; two are far apart, unless the lane is marked as not for placing cars, as the lanes that run far under
+; a bridge are. For those the game's own respawn doesn't use the lane at all. If nothing was found the
+; height is 0, and the lane is all there is.
+reset_height:
+    fld st0
+    fsub dword [esp+0x40]
+    fabs
+    fcomp dword [reset_height_limit]
+    fnstsw ax
+    sahf
+    jbe .done
+    fldz
+    fcomp st1
+    fnstsw ax
+    sahf
+    je .use_lane
+    mov eax, [esp+0x6c]
+    imul eax, eax, 0x50
+    add eax, [WAYPOINT_TABLE]
+    test byte [eax], 4
+    jnz .done
+.use_lane:
+    fstp st0
+    fld dword [esp+0x40]
+.done:
+    fadd dword [RESET_HEIGHT]
+    ret
+
+; Replaces the two instructions before the move in the reset, with the car's offset in
+; the car table in edi and the table in edx. The reset changes the waypoint of the car without taking
+; the car off the list of the old one, so that one kept counting it forever. Lanes looked taken, for
+; other cars and for the next reset. The game's own respawn, FUN_0041CAE0, does this before it moves.
+reset_unlink:
+    push edx
+    mov eax, [edx+edi+0x3c]
+    test eax, eax
+    js .done
+    cmp eax, [WAYPOINT_COUNT]
+    jg .done
+    mov eax, edi
+    xor edx, edx
+    mov ecx, 0xf0
+    div ecx
+    push eax
+    mov eax, WAYPOINT_UNLINK
+    call eax
+    add esp, 4
+.done:
+    pop edx
+    mov ecx, [edx+edi+0x10]
+    lea edx, [esp+0x48]
+    ret
+
+; Replaces storing the time of this reset, which is in st0, right after the move. Only the Enter key
+; looks at that time, for its wait of 5 seconds, so only Enter should set it: a racer that gets reset
+; every 3 seconds kept the Enter key from working at all. The move also only stops the car, not its
+; rotation, and the game's correction for a spinning car goes on until the spin stops, so a car could
+; get reset again on every frame. Stop the rotation of the body. The wheels keep theirs, as they did.
+reset_done:
+    mov eax, [CAR_TABLE]
+    mov eax, [eax+edi+0x10]
+    mov eax, [eax+8]
+    mov eax, [eax+0xa4]
+    xor edx, edx
+    mov [eax+0x94], edx                 ; rotation
+    mov [eax+0x98], edx
+    mov [eax+0x9c], edx
+    mov [eax+0x74], edx                 ; what is waiting to be added to the rotation
+    mov [eax+0x78], edx
+    mov [eax+0x7c], edx
+    mov [eax+0x84], edx                 ; the same for the speed
+    mov [eax+0x88], edx
+    mov [eax+0x8c], edx
+    cmp dword [esp+4+0x5c], ENTER_RESET_RETURN
+    jne .other
+    fstp dword [RESET_STAMP]
+    ret
+.other:
+    fstp st0
+    ret
+
+; Replaces stepping to the next section in the reset, when the lanes of this one look taken, with the
+; section in esi and its offset in the section table in ebp. The game's other placement code wraps
+; around after the last section. This didn't, and read past the tables.
+reset_next_section:
+    inc esi
+    add ebp, 0x994
+    cmp esi, [SECTION_COUNT]
+    jl .done
+    xor esi, esi
+    xor ebp, ebp
+.done:
+    ret
+
+; The same for stepping back, on a track driven in reverse.
+reset_previous_section:
+    dec esi
+    sub ebp, 0x994
+    jns .done
+    mov esi, [SECTION_COUNT]
+    dec esi
+    imul ebp, esi, 0x994
+.done:
+    ret
+
 ; Replaces the call to the game timer at the start of every frame, which has the timer
 ; object in ecx. Nothing that was checked needs a limit here any more. This keeps the
 ; frame rate inside the range the physics were measured in, about 440 at most, and far
@@ -852,6 +1001,7 @@ frame_time:         dd __float32__(0.0041666667)
 hung_speed:         dd __float32__(2.25)    ; 1.5 units per second, squared
 hung_up:            dd __float32__(0.5)
 hung_time:          dd __float32__(3.0)
+reset_height_limit: dd __float32__(25.0)
 user32_name:        db "USER32.DLL", 0
 enum_settings_name: db "EnumDisplaySettingsA", 0
 dpi_aware_name:     db "SetProcessDPIAware", 0
