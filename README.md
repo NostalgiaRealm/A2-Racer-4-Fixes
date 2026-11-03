@@ -14,9 +14,10 @@ Fixes for the PC version of **A2 Racer 4**:
 - pressing Enter, or the game putting a car back on the road, now actually frees the car;
 - a car that really gets caught on something, with its wheels in the air, goes back on the road by itself;
 - police cars, the chase camera, car lighting, skid marks, smoke, mud and water, pickups and more no longer change with the frame rate from 25 frames per second up;
-- the menu no longer stops with an error when Windows has been running for 25 to 50 days, and the turbo and the smoke work then too.
+- the menu no longer stops with an error when Windows has been running for 25 to 50 days, and the turbo and the smoke work then too;
+- under Wine the screen no longer stays black for 6 seconds before the menu, at startup and after every race.
 
-They consist of a patched `spel.dat` executable module that holds these fixes, a small patch to `menu.exe` for the CD check and the long uptime, and an automatic patcher called `A2Racer4Fixes`, for 64-bit and 32-bit Windows and Linux, that applies them to the game folder you choose. You run the patcher once.
+They consist of a patched `spel.dat` executable module that holds these fixes, small patches to `menu.exe` for the CD check and the long uptime and to `A2Racer4.exe` for the wait before the menu, and an automatic patcher called `A2Racer4Fixes`, for 64-bit and 32-bit Windows and Linux, that applies them to the game folder you choose. You run the patcher once.
 
 The game uses `spel.dat` as the executable module for the DirectDraw/Direct3D racing portion of the game, even though the file extension is `.dat`.
 
@@ -87,6 +88,16 @@ Windows counts the milliseconds since it started in a 32-bit number, and Windows
 - the lamp of the Supercop alarm stopped blinking.
 
 All of these now work however long Windows has been running. Only a menu or race open at the very moment the count starts again from 0, after 49.7 days, isn't covered.
+
+## Back to the menu under Wine (v1.5.4)
+
+Under Wine the screen stayed black for about 6 seconds before the menu appeared, at startup and after every race.
+
+`A2Racer4.exe`, the program that starts the game, covers the screen with a black window and runs the menu and the race in turn. While it waited for one of them to end, it didn't answer the messages for its windows. The menu switches the display to 800x600 as it starts, and Wine then waits up to 2 seconds for each window to answer that change. The launcher has three, so that was 6 seconds. Now it answers while it waits, and under Wine the menu appears within a second.
+
+Windows didn't have this wait. In a Windows 11 VM the menu was back within 0.3 seconds after a race with the original `A2Racer4.exe` and with the patched one, which works the same there.
+
+The details are in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#patch-part-15-the-launchers-wait).
 
 ## Cars that lift up or float (v1.5.1)
 
@@ -165,7 +176,7 @@ Run it from anywhere and enter:
 1. the game folder, the folder that contains `spel.dat`. Press Enter if the patcher is already in that folder;
 2. nothing for the resolution: press Enter and the game follows your display. To fix it instead, type one such as `2560x1440`.
 
-It writes the patched `spel.dat` and `menu.exe` into that folder, and puts back the game's own overlay `.ini` files if an older version of this patch changed them. Every file it replaces is moved to a `4x3_backup` folder in the game folder; earlier backups are never overwritten. It refuses to patch an unknown `spel.dat` version.
+It writes the patched `spel.dat`, `menu.exe` and `A2Racer4.exe` into that folder, and puts back the game's own overlay `.ini` files if an older version of this patch changed them. Every file it replaces is moved to a `4x3_backup` folder in the game folder; earlier backups are never overwritten. It refuses to patch an unknown `spel.dat` version.
 
 On Windows the patcher needs administrator rights, because the game is normally installed in `C:\Program Files (x86)`, or `C:\Program Files` on 32-bit Windows. Windows asks for them when you start it; click Yes (Allow on Vista). Windows 2000 and XP do not ask: use an administrator account, or right-click the patcher and choose Run as. Without administrator rights it stops and changes nothing. Windows 95, 98 and Me have no such rights.
 
@@ -234,11 +245,11 @@ This needs the game's own files, because a changed file would move twice. The pa
 
 ## Installation
 
-1. Run the patcher (on Windows, click Yes when it asks for administrator rights), then enter the game folder and press Enter at the resolution question. It writes the patched `spel.dat` and `menu.exe`, and moves the originals to the `4x3_backup` folder in the game folder.
+1. Run the patcher (on Windows, click Yes when it asks for administrator rights), then enter the game folder and press Enter at the resolution question. It writes the patched `spel.dat`, `menu.exe` and `A2Racer4.exe`, and moves the originals to the `4x3_backup` folder in the game folder.
 
 2. Start the racing part of the game normally.
 
-To install by hand instead: back up `spel.dat` and `menu.exe`, and follow the steps in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#manual-patching-on-windows).
+To install by hand instead: back up `spel.dat`, `menu.exe` and `A2Racer4.exe`, and follow the steps in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#manual-patching-on-windows).
 
 ## Notes
 
@@ -254,6 +265,7 @@ To install by hand instead: back up `spel.dat` and `menu.exe`, and follow the st
 - The v1.5.0 check for cars that get hung up was checked in-game by the author, and tested under Wine with software rendering, at 165 and 51 frames per second, with a bot and with test placements on a jump ramp. The numbers are in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#patch-part-11-cars-that-get-hung-up).
 - The v1.5.1 physics engine fix was tested under Wine with software rendering, with a bot on all nine stages and with test placements, and with the stuck car of a test read from the running game. It went out before any check on real hardware. The author then tested the v1.5.2 test build, which includes it, in-game. The numbers are in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#patch-part-12-contacts-that-outlive-their-triangle).
 - The v1.5.2 frame rate fixes were checked in-game by the author before the release. Under Wine with software rendering they were measured again for v1.5.3, at exact limits of 15, 30, 60, 120, 165 and 240 frames per second, with a bot and with test placements, and ran on all nine stages for 150 seconds each at the limit of 240. The numbers are in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#patch-part-13-what-still-counted-frames).
+- The v1.5.4 launcher change was tested under Wine 11.20 with a test tool that starts a race, quits it and quits the menu, and with the same tool in a Windows 11 VM, where the race ran too. The author tested the build in-game before the release. The numbers are in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#patch-part-15-the-launchers-wait).
 - The v1.5.3 uptime fixes were tested under Wine, with the count moved forward to 30 days and across 24.9 and 49.7 days in a test build, for the menu and for a race. The author tested the build in-game before the release. The numbers are in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#patch-part-14-a-long-windows-uptime).
 - Back up your original files before installing.
 - This project includes no game files: the patchers only carry the added code and the bytes they check and replace.

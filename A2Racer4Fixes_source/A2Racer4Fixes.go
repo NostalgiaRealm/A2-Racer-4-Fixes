@@ -16,11 +16,12 @@ import (
 )
 
 const (
-	patcherVersion  = "1.5.3"
-	gameFileName    = "spel.dat"
-	menuFileName    = "menu.exe"
-	backupDir       = "4x3_backup"
-	extraCarOverlay = "overlay7.ini"
+	patcherVersion   = "1.5.4"
+	gameFileName     = "spel.dat"
+	menuFileName     = "menu.exe"
+	launcherFileName = "A2Racer4.exe"
+	backupDir        = "4x3_backup"
+	extraCarOverlay  = "overlay7.ini"
 )
 
 var overlayNames = []string{
@@ -392,6 +393,14 @@ var spelPatchCode = []byte{
 
 const patchCodeOffset = 0x175500
 
+// A change to menu.exe or A2Racer4.exe: the bytes at offset go from original to
+// replacement.
+type exePatch struct {
+	offset      int
+	original    []byte
+	replacement []byte
+}
+
 // Changes to menu.exe.
 //
 // It stops at a "CD not found" dialog unless it finds DATA\INTRO1.MPG on a drive.
@@ -405,14 +414,44 @@ const patchCodeOffset = 0x175500
 // shutdown. Skip that check, and the overflow check when it works out how long the
 // log has run, which the same count can trip.
 // jns 0x0045F552 -> jmp, jno 0x0045F6D2 -> jmp
-var menuPatches = []struct {
-	offset      int
-	original    []byte
-	replacement []byte
-}{
+var menuPatches = []exePatch{
 	{0x0A5154, []byte{0xE8, 0x7F, 0xFE, 0xFF, 0xFF, 0x84, 0xC0, 0x74, 0x08}, []byte{0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90}},
 	{0x05E94B, []byte{0x79}, []byte{0xEB}},
 	{0x05EACB, []byte{0x71}, []byte{0xEB}},
+}
+
+// Changes to A2Racer4.exe, which covers the screen with a black window and runs
+// menu.exe and spel.dat in turn.
+//
+// It waited for each without handling the messages for its windows. The menu sets
+// 800x600 as it starts, and Wine then waits up to 2 seconds for each of the
+// launcher's three windows to answer WM_DISPLAYCHANGE, so the menu stayed black for
+// 6 seconds at startup and after every race. The added code, from
+// launcher_patch.asm, handles those messages while it waits. The code section's
+// size in memory grows to cover it, and where the C library starts a program and
+// waits for it, it calls that code instead of WaitForSingleObject.
+var launcherPatches = []exePatch{
+	{0x0001F0, []byte{0xF7, 0x48, 0x00, 0x00}, []byte{0x00, 0x50, 0x00, 0x00}},
+	{0x0055BB, []byte{0xFF, 0x15, 0x14, 0x60, 0x40, 0x00}, []byte{0xE8, 0x40, 0x03, 0x00, 0x00, 0x90}},
+	{0x005900, make([]byte, len(launcherPatchCode)), launcherPatchCode},
+}
+
+var launcherPatchCode = []byte{
+	0x53, 0x56, 0x57, 0x83, 0xEC, 0x1C, 0x8B, 0x5C, 0x24, 0x2C, 0x68, 0x8E,
+	0x59, 0x40, 0x00, 0xFF, 0x15, 0x60, 0x60, 0x40, 0x00, 0x85, 0xC0, 0x74,
+	0x63, 0x68, 0x99, 0x59, 0x40, 0x00, 0x50, 0xFF, 0x15, 0x50, 0x60, 0x40,
+	0x00, 0x85, 0xC0, 0x74, 0x53, 0x89, 0xC6, 0x89, 0xE7, 0x6A, 0x01, 0x6A,
+	0x00, 0x6A, 0x00, 0x6A, 0x00, 0x57, 0xFF, 0x15, 0x10, 0x61, 0x40, 0x00,
+	0x85, 0xC0, 0x74, 0x16, 0x83, 0x7F, 0x04, 0x12, 0x74, 0x2D, 0x57, 0xFF,
+	0x15, 0x08, 0x61, 0x40, 0x00, 0x57, 0xFF, 0x15, 0xD4, 0x60, 0x40, 0x00,
+	0xEB, 0xD7, 0x68, 0xFF, 0x00, 0x00, 0x00, 0x6A, 0xFF, 0x6A, 0x00, 0x8D,
+	0x44, 0x24, 0x38, 0x50, 0x6A, 0x01, 0xFF, 0xD6, 0x83, 0xF8, 0x01, 0x74,
+	0xC0, 0x85, 0xC0, 0x74, 0x14, 0xEB, 0x09, 0xFF, 0x77, 0x08, 0xFF, 0x15,
+	0xDC, 0x60, 0x40, 0x00, 0x6A, 0xFF, 0x53, 0xFF, 0x15, 0x14, 0x60, 0x40,
+	0x00, 0x83, 0xC4, 0x1C, 0x5F, 0x5E, 0x5B, 0xC2, 0x08, 0x00, 0x55, 0x53,
+	0x45, 0x52, 0x33, 0x32, 0x2E, 0x44, 0x4C, 0x4C, 0x00, 0x4D, 0x73, 0x67,
+	0x57, 0x61, 0x69, 0x74, 0x46, 0x6F, 0x72, 0x4D, 0x75, 0x6C, 0x74, 0x69,
+	0x70, 0x6C, 0x65, 0x4F, 0x62, 0x6A, 0x65, 0x63, 0x74, 0x73, 0x00,
 }
 
 func main() {
@@ -464,8 +503,8 @@ func run() bool {
 	} else {
 		fmt.Printf("Created patched %s, fixed at %dx%d.\n", gameFileName, width, height)
 	}
-	fmt.Println("The crash, transparency, flicker, car physics, frame rate and uptime fixes")
-	fmt.Println("and the CD check removal are included.")
+	fmt.Println("The crash, transparency, flicker, car physics, frame rate and uptime fixes,")
+	fmt.Println("the CD check removal and the quicker menu start under Wine are included.")
 	fmt.Println()
 
 	if err := restoreOverlays(gameDir); err != nil {
@@ -476,11 +515,19 @@ func run() bool {
 		return false
 	}
 
-	if err := patchMenu(gameDir); err != nil {
+	if err := patchExe(gameDir, menuFileName, menuPatches); err != nil {
 		fmt.Println()
 		fmt.Println("Patching "+menuFileName+" failed:", err)
 		fmt.Println(gameFileName + " and the HUD files are patched, but the menu may still ask for the CD,")
 		fmt.Println("and stop at startup when Windows has run for 25 to 50 days.")
+		return false
+	}
+
+	if err := patchExe(gameDir, launcherFileName, launcherPatches); err != nil {
+		fmt.Println()
+		fmt.Println("Patching "+launcherFileName+" failed:", err)
+		fmt.Println("The other files are patched, but under Wine the menu may stay black for")
+		fmt.Println("6 seconds at startup and after each race.")
 		return false
 	}
 
@@ -801,31 +848,31 @@ func patchCodeFits(data []byte) bool {
 	return bytes.Equal(place, spelPatchCode[:size]) || bytes.Equal(place, make([]byte, size))
 }
 
-// patchMenu applies menuPatches to menu.exe. A file that already has all of them
-// is left alone, so running the patcher again keeps the original backup.
-func patchMenu(gameDir string) error {
-	inputPath, _ := findFile(gameDir, menuFileName)
+// patchExe applies patches to the program called name. A file that already has all
+// of them is left alone, so running the patcher again keeps the original backup.
+func patchExe(gameDir string, name string, patches []exePatch) error {
+	inputPath, _ := findFile(gameDir, name)
 
 	unchanged := func(err error) error {
-		return fmt.Errorf("%v. %s was not changed", err, menuFileName)
+		return fmt.Errorf("%v. %s was not changed", err, name)
 	}
 
 	data, err := os.ReadFile(inputPath)
 	if err != nil {
-		return unchanged(fmt.Errorf("could not read %s: %v", menuFileName, err))
+		return unchanged(fmt.Errorf("could not read %s: %v", name, err))
 	}
 
 	changed := false
-	for _, p := range menuPatches {
+	for _, p := range patches {
 		if len(data) < p.offset+len(p.original) {
-			return unchanged(fmt.Errorf("%s is smaller than expected; wrong file?", menuFileName))
+			return unchanged(fmt.Errorf("%s is smaller than expected; wrong file?", name))
 		}
 		current := data[p.offset : p.offset+len(p.original)]
 		if bytes.Equal(current, p.replacement) {
 			continue
 		}
 		if !bytes.Equal(current, p.original) {
-			return unchanged(fmt.Errorf("bytes did not match expected original pattern at 0x%X. This may be the wrong %s version", p.offset, menuFileName))
+			return unchanged(fmt.Errorf("bytes did not match expected original pattern at 0x%X. This may be the wrong %s version", p.offset, name))
 		}
 		copy(current, p.replacement)
 		changed = true
@@ -840,14 +887,14 @@ func patchMenu(gameDir string) error {
 	}
 
 	if err := os.Rename(inputPath, backupPath); err != nil {
-		return unchanged(fmt.Errorf("could not move original %s to %s: %v", menuFileName, backupPath, err))
+		return unchanged(fmt.Errorf("could not move original %s to %s: %v", name, backupPath, err))
 	}
 
 	if err := writeVerified(inputPath, data); err != nil {
 		if restoreErr := os.Rename(backupPath, inputPath); restoreErr != nil {
-			return fmt.Errorf("could not write patched %s: %v. The original is still in %s", menuFileName, err, backupPath)
+			return fmt.Errorf("could not write patched %s: %v. The original is still in %s", name, err, backupPath)
 		}
-		return fmt.Errorf("could not write patched %s: %v. The original %s was put back", menuFileName, err, menuFileName)
+		return fmt.Errorf("could not write patched %s: %v. The original %s was put back", name, err, name)
 	}
 
 	return nil

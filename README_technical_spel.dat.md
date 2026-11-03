@@ -57,6 +57,7 @@ file offset 0x1B3798 -> VA 0x005B3798
 | 12 | Contacts in the physics engine end when they leave their triangle at any frame rate, and when an object is moved; the reset cleans up after itself |
 | 13 | Police, the Supercop, the chase camera, car lighting, skid marks, smoke, mud and water, pickups, animated objects, debris, letters, the speed camera flash, the portrait outline and the turbo tank no longer depend on the frame rate from 25 FPS up |
 | 14 | The menu no longer stops at startup, and the turbo and the smoke keep working, when Windows has been running for 24.9 to 49.7 days |
+| 15 | `A2Racer4.exe` answers its messages while the menu or a race runs, so under Wine the menu no longer stays black for 6 seconds |
 
 ## Patch part 1: display-mode table
 
@@ -831,9 +832,90 @@ The menu, through the launcher, with the same change to `menu.exe`:
 - A race running at the very moment the count wraps can keep the Enter key waiting, as its wait compares floats of the count. Each race is its own process, so the next one is fine.
 - All of this ran under Wine, with the count moved forward in a test build. The author tested the build in-game before the release, with no figures on the uptime.
 
+## Patch part 15: the launcher's wait
+
+Under Wine the screen stayed black for about 6 seconds before the menu appeared, at startup and after every race.
+
+### Why
+
+`A2Racer4.exe` covers the screen with a black `MOTOR` window and runs `menu.exe /FirstTime`, then `spel.dat` each time the menu ends with exit code 40, and `menu.exe /Default` after each race (`FUN_00401250`). It checks its messages with `PeekMessageA` just before it starts the menu. Then it waits in the C library's `_spawnve` with `P_WAIT`, which calls `WaitForSingleObject(process, INFINITE)` at `0x004055BB` and checks no messages until that program ends.
+
+Before it opens a window, the menu switches to 800x600: `FUN_00481634` tries 24, 16, 15 and 32 bits with `ChangeDisplaySettingsA`. After a program changes the display mode, Wine sends `WM_DISPLAYCHANGE` to every top-level window with `SMTO_ABORTIFHUNG` and a timeout of 2000 ms (`display_mode_changed` in `win32u/sysparams.c`). The launcher's thread owns three: `MOTOR`, and two hidden windows for text input, `IME` ("Default IME") and `Wine IME`. A trace with Wine 11.20 of the menu's start after a race:
+
+```text
+50100.755  menu.exe sets 800x600
+50100.833  WM_DISPLAYCHANGE to 0x10056 (MOTOR)
+50102.833  no answer after 2 seconds
+50102.833  to 0x10064 (Wine IME)
+50104.833  no answer after 2 seconds
+50104.833  to 0x1005A (IME)
+50106.833  no answer after 2 seconds, then every other window answers at once
+```
+
+`SMTO_ABORTIFHUNG` skips the windows of a program that hasn't checked its messages for a while. That is why the start of a race, where the menu puts the display mode back, had no wait: the launcher hadn't checked its messages since it started the menu, 30 seconds before. Just before the menu, it always had. When the menu starts with `/FirstTime`, its log shows the same 6 seconds between its first two lines, here from a game in Lutris with Wine 11.19:
+
+```text
+       0 M  0 Version 1/0/0/59
+    6073 E  0 GameMenuExceptionLogger : ** Exception logging started **
+```
+
+With `/Default` the wait comes before the first line, so the log doesn't show it.
+
+### The fix
+
+The call at `0x004055BB` now goes to `wait_for_process` at `0x00405900`, in unused space at the end of the code section, from [`A2Racer4Fixes_source/launcher_patch.asm`](A2Racer4Fixes_source/launcher_patch.asm). It hands the launcher's messages to its window procedure with `PeekMessageA`, `TranslateMessage` and `DispatchMessageA`, and waits with `MsgWaitForMultipleObjects` until the program ends or another message arrives. A `WM_QUIT` is posted again for the launcher's own loop, after which the code waits as before. The launcher doesn't import `MsgWaitForMultipleObjects`, so the code looks it up with `GetProcAddress`, and also waits as before if that fails. The section's size in memory grows from `0x48F7` to `0x5000` to cover the code. The file keeps its size.
+
+| File offset | VA | Original | Patched |
+|---|---|---|---|
+| `0x0001F0` | | `F7 48 00 00` | `00 50 00 00`, the size of `.text` in memory |
+| `0x0055BB` | `0x004055BB` | `FF 15 14 60 40 00` | `E8 40 03 00 00 90` |
+| `0x005900` | `0x00405900` | 179 zero bytes | the code below |
+
+179 bytes at `0x005900`:
+
+```text
+53 56 57 83 EC 1C 8B 5C 24 2C 68 8E 59 40 00 FF 15 60 60 40 00 85 C0 74
+63 68 99 59 40 00 50 FF 15 50 60 40 00 85 C0 74 53 89 C6 89 E7 6A 01 6A
+00 6A 00 6A 00 57 FF 15 10 61 40 00 85 C0 74 16 83 7F 04 12 74 2D 57 FF
+15 08 61 40 00 57 FF 15 D4 60 40 00 EB D7 68 FF 00 00 00 6A FF 6A 00 8D
+44 24 38 50 6A 01 FF D6 83 F8 01 74 C0 85 C0 74 14 EB 09 FF 77 08 FF 15
+DC 60 40 00 6A FF 53 FF 15 14 60 40 00 83 C4 1C 5F 5E 5B C2 08 00 55 53
+45 52 33 32 2E 44 4C 4C 00 4D 73 67 57 61 69 74 46 6F 72 4D 75 6C 74 69
+70 6C 65 4F 62 6A 65 63 74 73 00
+```
+
+The window procedure (`FUN_00401440`) paints the window black, hides the cursor over it and closes it on `WM_CLOSE`. Everything else goes to `DefWindowProcA`. So the launcher's window looks and acts the same while it waits.
+
+### Measurements
+
+Under Wine 11.20 with Xvfb, through the launcher, with a test tool that starts a race, quits it after 35 seconds and then quits the menu:
+
+| | Original launcher | Patched launcher |
+|---|---|---|
+| Menu on screen after the launcher starts | 6.8 s | 0.7 s |
+| Menu on screen after `spel.dat` ends | 6.5 s | 0.5 s |
+| Launcher ends after the menu is quit | yes | yes |
+
+With the patched launcher the trace has no timeouts. A `WM_CLOSE` sent to the launcher's window during a race now closes that window at once. The launcher still ends once the race ends, as it did before when it handled that message after the race.
+
+The same in a Windows 11 VM (QEMU with KVM, offline, virtio display at 1600x1200), where the race ran too:
+
+| | Original launcher | Patched launcher |
+|---|---|---|
+| Menu on screen after the launcher starts | 0.8 s | 0.3 s |
+| Menu on screen after `spel.dat` ends | 0.26 s | 0.20 s |
+| Launcher ends after the menu is quit | yes | yes |
+
+Windows 11 didn't wait with the original launcher either: its menu log had 31 to 47 ms between the two lines above. Two more runs of each launcher went through the same steps. The one difference: the launcher's black window now follows the display mode, at 800x600 while the menu runs, because it now handles the message for that. It is behind the menu and the race either way.
+
+### What this doesn't establish
+
+- Why Windows doesn't wait for the launcher's windows. In the VM it didn't, before or after the change.
+- Windows versions other than 11. The author tested the build in-game before the release, on a system that isn't recorded.
+
 ## All added and changed bytes
 
-This has every change from the parts above, apart from the bytes that parts 2 to 5 describe themselves and the changes to `menu.exe` in parts 7 and 14.
+This has every change from the parts above, apart from the bytes that parts 2 to 5 describe themselves, the changes to `menu.exe` in parts 7 and 14, and the changes to `A2Racer4.exe` in part 15.
 
 The added code is built from [`A2Racer4Fixes_source/spel_patch.asm`](A2Racer4Fixes_source/spel_patch.asm). It goes in unused space at the end of `.text`, file offset `0x175500`, VA `0x00575500`, and the section's virtual size is raised so that space is certainly mapped. That space must be all zero before patching. Both section sizes are raised: `.text` to `0x175000`, and `.data` from `0x1C4408` to `0x1C5000`, for the variables at `0x751F00` and up. A `spel.dat` patched by v1.2.0 to v1.5.2 has older code there, and one patched by v1.1.1 or older has other bytes where this patch checks, so in both cases the patcher starts from the copy in `4x3_backup`.
 
@@ -1168,7 +1250,11 @@ Then place it in the game directory.
 
 Back up `menu.exe` and apply its three changes: the CD check from [Patch part 7](#patch-part-7-cd-check-removal), and at file offsets `0x05E94B` and `0x05EACB` the uptime changes from [Patch part 14](#patch-part-14-a-long-windows-uptime), `79` to `EB` and `71` to `EB`.
 
-### Step 9: check the overlay `.ini` files
+### Step 9: change `A2Racer4.exe`
+
+Back up `A2Racer4.exe` and apply the three changes from [Patch part 15](#patch-part-15-the-launchers-wait).
+
+### Step 10: check the overlay `.ini` files
 
 They must be the game's own files. A file an older version of this fix changed is moved a second time. Restore it from `4x3_backup` or the game CD.
 
@@ -1565,9 +1651,32 @@ for offset, old, new in [
 menu.write_bytes(data)
 ```
 
-### Step 6: check the overlay `.ini` files
+### Step 6: change `A2Racer4.exe`
 
-As Step 9 for Windows.
+Back up `A2Racer4.exe` and change it as in Step 9 for Windows. `launcher_patch.bin` is the code from [`A2Racer4Fixes_source/launcher_patch.asm`](A2Racer4Fixes_source/launcher_patch.asm), built with `nasm -f bin -o launcher_patch.bin launcher_patch.asm`, or the 179 bytes from Patch part 15 saved as a file:
+
+```python
+from pathlib import Path
+
+launcher = Path("A2Racer4.exe")
+code = Path("launcher_patch.bin").read_bytes()
+data = bytearray(launcher.read_bytes())
+for offset, old, new in [
+    (0x0001F0, bytes.fromhex("F7 48 00 00"), bytes.fromhex("00 50 00 00")),
+    (0x0055BB, bytes.fromhex("FF 15 14 60 40 00"), bytes.fromhex("E8 40 03 00 00 90")),
+    (0x005900, bytes(len(code)), code),
+]:
+    if data[offset:offset + len(new)] == new:
+        continue
+    if data[offset:offset + len(old)] != old:
+        raise RuntimeError(f"Unexpected bytes at 0x{offset:X}. Wrong A2Racer4.exe version?")
+    data[offset:offset + len(old)] = new
+launcher.write_bytes(data)
+```
+
+### Step 7: check the overlay `.ini` files
+
+As Step 10 for Windows.
 
 ## Values for other resolutions
 
@@ -1612,6 +1721,10 @@ Check both changes in [Patch part 7](#patch-part-7-cd-check-removal). The menu a
 ### The menu stops with an error at startup
 
 If Windows has been running for 25 to 50 days, check the two `menu.exe` changes in [Patch part 14](#patch-part-14-a-long-windows-uptime). Restarting Windows, with Fast Startup off, also helps.
+
+### Under Wine the menu stays black for a few seconds
+
+Check the three `A2Racer4.exe` changes in [Patch part 15](#patch-part-15-the-launchers-wait). They only help when the game starts through `A2Racer4.exe`.
 
 ### The game stops with "could not set display mode"
 

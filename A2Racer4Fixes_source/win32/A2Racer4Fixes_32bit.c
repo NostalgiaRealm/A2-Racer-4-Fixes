@@ -11,9 +11,10 @@
  */
 #include <windows.h>
 
-#define PATCHER_VERSION "1.5.3"
+#define PATCHER_VERSION "1.5.4"
 #define GAME_FILE "spel.dat"
 #define MENU_FILE "menu.exe"
+#define LAUNCHER_FILE "A2Racer4.exe"
 #define BACKUP_DIR "4x3_backup"
 #define EXTRA_CAR_OVERLAY "overlay7.ini"
 #define MIN_GAME_SIZE 0x1B3932
@@ -639,18 +640,54 @@ static const unsigned char nops[7] = {0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90};
 static const unsigned char view_x_opcode[] = {0xC7, 0x46, 0x14};
 static const unsigned char view_width_opcode[] = {0xC7, 0x46, 0x1C};
 
-/* See menuPatches in the Go patcher. */
-#define MENU_PATCH_COUNT 3
-static const struct {
+/* A change to menu.exe or A2Racer4.exe, see exePatch in the Go patcher. */
+struct exe_patch {
 	DWORD offset;
 	int size;
-	unsigned char original[9];
-	unsigned char replacement[9];
-} menu_patches[MENU_PATCH_COUNT] = {
-	{0x0A5154, 9, {0xE8, 0x7F, 0xFE, 0xFF, 0xFF, 0x84, 0xC0, 0x74, 0x08},
-		{0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90}},
-	{0x05E94B, 1, {0x79}, {0xEB}},
-	{0x05EACB, 1, {0x71}, {0xEB}},
+	const unsigned char *original;
+	const unsigned char *replacement;
+};
+
+/* See menuPatches in the Go patcher. */
+static const unsigned char cd_search[] = {0xE8, 0x7F, 0xFE, 0xFF, 0xFF, 0x84, 0xC0, 0x74, 0x08};
+static const unsigned char cd_search_skipped[] = {0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90};
+static const unsigned char jns[] = {0x79}, jno[] = {0x71}, jmp[] = {0xEB};
+#define MENU_PATCH_COUNT 3
+static const struct exe_patch menu_patches[MENU_PATCH_COUNT] = {
+	{0x0A5154, 9, cd_search, cd_search_skipped},
+	{0x05E94B, 1, jns, jmp},
+	{0x05EACB, 1, jno, jmp},
+};
+
+/* See launcherPatches in the Go patcher. The added code is from
+   ../launcher_patch.asm. */
+static const unsigned char launcher_patch_code[] = {
+	0x53, 0x56, 0x57, 0x83, 0xEC, 0x1C, 0x8B, 0x5C, 0x24, 0x2C, 0x68, 0x8E,
+	0x59, 0x40, 0x00, 0xFF, 0x15, 0x60, 0x60, 0x40, 0x00, 0x85, 0xC0, 0x74,
+	0x63, 0x68, 0x99, 0x59, 0x40, 0x00, 0x50, 0xFF, 0x15, 0x50, 0x60, 0x40,
+	0x00, 0x85, 0xC0, 0x74, 0x53, 0x89, 0xC6, 0x89, 0xE7, 0x6A, 0x01, 0x6A,
+	0x00, 0x6A, 0x00, 0x6A, 0x00, 0x57, 0xFF, 0x15, 0x10, 0x61, 0x40, 0x00,
+	0x85, 0xC0, 0x74, 0x16, 0x83, 0x7F, 0x04, 0x12, 0x74, 0x2D, 0x57, 0xFF,
+	0x15, 0x08, 0x61, 0x40, 0x00, 0x57, 0xFF, 0x15, 0xD4, 0x60, 0x40, 0x00,
+	0xEB, 0xD7, 0x68, 0xFF, 0x00, 0x00, 0x00, 0x6A, 0xFF, 0x6A, 0x00, 0x8D,
+	0x44, 0x24, 0x38, 0x50, 0x6A, 0x01, 0xFF, 0xD6, 0x83, 0xF8, 0x01, 0x74,
+	0xC0, 0x85, 0xC0, 0x74, 0x14, 0xEB, 0x09, 0xFF, 0x77, 0x08, 0xFF, 0x15,
+	0xDC, 0x60, 0x40, 0x00, 0x6A, 0xFF, 0x53, 0xFF, 0x15, 0x14, 0x60, 0x40,
+	0x00, 0x83, 0xC4, 0x1C, 0x5F, 0x5E, 0x5B, 0xC2, 0x08, 0x00, 0x55, 0x53,
+	0x45, 0x52, 0x33, 0x32, 0x2E, 0x44, 0x4C, 0x4C, 0x00, 0x4D, 0x73, 0x67,
+	0x57, 0x61, 0x69, 0x74, 0x46, 0x6F, 0x72, 0x4D, 0x75, 0x6C, 0x74, 0x69,
+	0x70, 0x6C, 0x65, 0x4F, 0x62, 0x6A, 0x65, 0x63, 0x74, 0x73, 0x00,
+};
+static const unsigned char no_launcher_code[sizeof(launcher_patch_code)];
+static const unsigned char code_size[] = {0xF7, 0x48, 0x00, 0x00};
+static const unsigned char code_size_grown[] = {0x00, 0x50, 0x00, 0x00};
+static const unsigned char wait_call[] = {0xFF, 0x15, 0x14, 0x60, 0x40, 0x00};
+static const unsigned char wait_call_added[] = {0xE8, 0x40, 0x03, 0x00, 0x00, 0x90};
+#define LAUNCHER_PATCH_COUNT 3
+static const struct exe_patch launcher_patches[LAUNCHER_PATCH_COUNT] = {
+	{0x0001F0, 4, code_size, code_size_grown},
+	{0x0055BB, 6, wait_call, wait_call_added},
+	{0x005900, sizeof(launcher_patch_code), no_launcher_code, launcher_patch_code},
 };
 
 static HANDLE input, output;
@@ -1220,15 +1257,17 @@ static BOOL patch_in_place(int width, int height)
 	return TRUE;
 }
 
-/* Applies menu_patches to menu.exe. A file that already has all of them is left
-   alone, so running the patcher again keeps the original backup. */
-static BOOL menu_unchanged(void)
+/* Applies patches to the program called name. A file that already has all of
+   them is left alone, so running the patcher again keeps the original backup. */
+static BOOL exe_unchanged(const char *name)
 {
-	lstrcatA(error, ". " MENU_FILE " was not changed");
+	lstrcatA(error, ". ");
+	lstrcatA(error, name);
+	lstrcatA(error, " was not changed");
 	return FALSE;
 }
 
-static BOOL patch_menu(void)
+static BOOL patch_exe(const char *name, const struct exe_patch *patches, int count)
 {
 	static char input_path[PATH_SIZE];
 	static char backup_path[PATH_SIZE];
@@ -1237,27 +1276,27 @@ static BOOL patch_menu(void)
 	int i;
 	BOOL changed = FALSE;
 
-	find_file(game_dir, MENU_FILE, input_path);
+	find_file(game_dir, name, input_path);
 
 	data = read_file(input_path, &size);
 	if (data == NULL) {
-		FAIL("could not read " MENU_FILE ": %s", system_error());
-		return menu_unchanged();
+		FAIL("could not read %s: %s", name, system_error());
+		return exe_unchanged(name);
 	}
 
-	for (i = 0; i < MENU_PATCH_COUNT; i++) {
-		if (size < menu_patches[i].offset + menu_patches[i].size) {
-			FAIL(MENU_FILE " is smaller than expected; wrong file?");
-			return menu_unchanged();
+	for (i = 0; i < count; i++) {
+		if (size < patches[i].offset + patches[i].size) {
+			FAIL("%s is smaller than expected; wrong file?", name);
+			return exe_unchanged(name);
 		}
-		if (same_bytes(data + menu_patches[i].offset, menu_patches[i].replacement, menu_patches[i].size))
+		if (same_bytes(data + patches[i].offset, patches[i].replacement, patches[i].size))
 			continue;
-		if (!same_bytes(data + menu_patches[i].offset, menu_patches[i].original, menu_patches[i].size)) {
-			FAIL("bytes did not match expected original pattern at 0x%X. This may be the wrong " MENU_FILE " version",
-				menu_patches[i].offset);
-			return menu_unchanged();
+		if (!same_bytes(data + patches[i].offset, patches[i].original, patches[i].size)) {
+			FAIL("bytes did not match expected original pattern at 0x%X. This may be the wrong %s version",
+				patches[i].offset, name);
+			return exe_unchanged(name);
 		}
-		memcpy(data + menu_patches[i].offset, menu_patches[i].replacement, menu_patches[i].size);
+		memcpy(data + patches[i].offset, patches[i].replacement, patches[i].size);
 		changed = TRUE;
 	}
 
@@ -1267,20 +1306,20 @@ static BOOL patch_menu(void)
 	}
 
 	if (!backup_path_for(base_name(input_path), backup_path))
-		return menu_unchanged();
+		return exe_unchanged(name);
 
 	if (!MoveFileA(input_path, backup_path)) {
-		FAIL("could not move original " MENU_FILE " to %s: %s", backup_path, system_error());
-		return menu_unchanged();
+		FAIL("could not move original %s to %s: %s", name, backup_path, system_error());
+		return exe_unchanged(name);
 	}
 
 	if (!write_verified(input_path, data, size)) {
 		DeleteFileA(input_path);
 		if (!MoveFileA(backup_path, input_path))
-			return FAIL("could not write patched " MENU_FILE ": %s. The original is still in %s",
-				earlier(), backup_path);
-		return FAIL("could not write patched " MENU_FILE ": %s. The original " MENU_FILE " was put back",
-			earlier());
+			return FAIL("could not write patched %s: %s. The original is still in %s",
+				name, earlier(), backup_path);
+		return FAIL("could not write patched %s: %s. The original %s was put back",
+			name, earlier(), name);
 	}
 
 	HeapFree(GetProcessHeap(), 0, data);
@@ -1589,8 +1628,8 @@ static BOOL run(void)
 		say("Created patched " GAME_FILE ". The game now follows the resolution of your display.\r\n");
 	else
 		SAY("Created patched " GAME_FILE ", fixed at %dx%d.\r\n", width, height);
-	say("The crash, transparency, flicker, car physics, frame rate and uptime fixes\r\n");
-	say("and the CD check removal are included.\r\n\r\n");
+	say("The crash, transparency, flicker, car physics, frame rate and uptime fixes,\r\n");
+	say("the CD check removal and the quicker menu start under Wine are included.\r\n\r\n");
 
 	if (!restore_overlays()) {
 		SAY("\r\nRestoring the HUD files failed: %s\r\n", error);
@@ -1599,10 +1638,17 @@ static BOOL run(void)
 		return FALSE;
 	}
 
-	if (!patch_menu()) {
+	if (!patch_exe(MENU_FILE, menu_patches, MENU_PATCH_COUNT)) {
 		SAY("\r\nPatching " MENU_FILE " failed: %s\r\n", error);
 		say(GAME_FILE " and the HUD files are patched, but the menu may still ask for the CD,\r\n");
 		say("and stop at startup when Windows has run for 25 to 50 days.\r\n");
+		return FALSE;
+	}
+
+	if (!patch_exe(LAUNCHER_FILE, launcher_patches, LAUNCHER_PATCH_COUNT)) {
+		SAY("\r\nPatching " LAUNCHER_FILE " failed: %s\r\n", error);
+		say("The other files are patched, but under Wine the menu may stay black for\r\n");
+		say("6 seconds at startup and after each race.\r\n");
 		return FALSE;
 	}
 
