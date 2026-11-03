@@ -52,7 +52,7 @@ Release binaries are built from a clean git checkout of the tagged commit. The G
 
 ## Windows manifest
 
-`A2Racer4Fixes.exe.manifest` (64-bit) and `win32/A2Racer4Fixes_32bit.exe.manifest` (32-bit) set `requireAdministrator`, so Windows Vista and newer ask for administrator rights before the patcher starts. The 32-bit one says `x86` and also lists Windows Vista, 7, 8 and 8.1 as supported. Older Windows ignores the request, so on Windows XP the patcher's own check is what stops a user without administrator rights. `rsrc_windows_amd64.syso` is the 64-bit manifest compiled as a resource; Go links it into 64-bit Windows builds automatically. After changing it, regenerate it with MinGW's `windres`:
+`A2Racer4Fixes.exe.manifest` (64-bit) and `win32/A2Racer4Fixes_32bit.exe.manifest` (32-bit) set `requireAdministrator`, so Windows Vista and newer ask for administrator rights before the patcher starts. The 32-bit one says `x86` and also lists Windows Vista, 7, 8 and 8.1 as supported. Older Windows ignores the request, so on Windows 2000 and XP the patcher's own check is what stops a user without administrator rights. `rsrc_windows_amd64.syso` is the 64-bit manifest compiled as a resource; Go links it into 64-bit Windows builds automatically. After changing it, regenerate it with MinGW's `windres`:
 
 ```bash
 x86_64-w64-mingw32-windres -O coff -i A2Racer4Fixes.rc -o rsrc_windows_amd64.syso
@@ -68,7 +68,7 @@ Run `A2Racer4Fixes` from anywhere. It asks for:
 2560x1440
 ```
 
-The patcher creates a `4x3_backup` folder in the game folder, moves the original `spel.dat` into it, and writes a new patched `spel.dat`. A `spel.dat` from an older version with other added code is rebuilt from the copy in `4x3_backup`.
+The patcher creates a `4x3_backup` folder in the game folder, moves the original `spel.dat` into it, and writes a new patched `spel.dat`. A `spel.dat` from an older version with other added code is rebuilt from the copy in `4x3_backup`, and so is one from v1.1.1 or older, which changed bytes that this version checks. A backup that would get the name of an existing one in the same second gets a number added.
 
 The resolution is not in the patched file unless you fix one: the added code reads it when the game starts, see `spel_patch.asm`. Overlay `.ini` files stay as the game ships them. Where an older version changed them, the patcher puts them back:
 - the original comes from `4x3_backup` after an earlier run, otherwise from the game folder, and a file an older HUD fix changed is refused;
@@ -76,9 +76,9 @@ The resolution is not in the patched file unless you fix one: the added code rea
 - files that are already the original are skipped;
 - a missing `overlay7.ini` is fine, since only the "Schaduw" extra car update brings it.
 
-File names are matched case-insensitively, and quoted, escaped and `~` paths are accepted. The 32-bit Windows version uses the non-Unicode file functions, so a game folder with characters outside the system's code page gives an error there.
+File names are matched case-insensitively. Quoted paths work in every version, `~` in the Go versions, and escaped characters on Linux. The 32-bit Windows version uses the non-Unicode file functions, so a game folder with characters outside the system's code page gives an error there.
 
-The patched file also contains the texture memory crash fix for modern graphics cards, the transparency fix, the CD check removal, the deeper Z-buffer, the car physics fixes, the 32-bit display mode, the check for cars that get hung up, the fix for contacts in the physics engine and the frame rate fixes. The patcher also moves `menu.exe` to `4x3_backup` and writes a copy without the CD check; a file that already has the change is left alone. Every code change is checked against the expected original bytes first, so an unknown `spel.dat` version is left untouched. Running the patcher on an already patched `spel.dat` updates it to the current patch.
+The patched file also contains the texture memory crash fix for modern graphics cards, the transparency fix, the CD check removal, the deeper Z-buffer, the car physics fixes, the 32-bit display mode, the check for cars that get hung up, the fix for contacts in the physics engine, the frame rate fixes and the uptime fixes. The patcher also moves `menu.exe` to `4x3_backup` and writes a copy without the CD check and without the error at startup when Windows has run for 25 to 50 days; a file that already has these changes is left alone. Every code change is checked against the expected original bytes first, so an unknown `spel.dat` version is left untouched. Running the patcher on an already patched `spel.dat` updates it to the current patch.
 
 On Windows the patcher only runs with administrator rights; without them it stops before changing anything. Windows 95, 98 and Me have no such rights. The Linux version needs no root rights, because the game lives in your own Wine prefix.
 

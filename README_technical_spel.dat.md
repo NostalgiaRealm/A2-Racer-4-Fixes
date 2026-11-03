@@ -55,7 +55,8 @@ file offset 0x1B3798 -> VA 0x005B3798
 | 10 | 32-bit display mode from Windows Vista on, not related to the screen shape |
 | 11 | A car that hangs with an axle in the air, or tipped over, goes back on the road |
 | 12 | Contacts in the physics engine end when they leave their triangle at any frame rate, and when an object is moved; the reset cleans up after itself |
-| 13 | Police, the Supercop, the chase camera, car lighting, skid marks, smoke, mud and water, pickups, animated objects, debris, the speed camera flash and the turbo tank no longer depend on the frame rate |
+| 13 | Police, the Supercop, the chase camera, car lighting, skid marks, smoke, mud and water, pickups, animated objects, debris, letters, the speed camera flash, the portrait outline and the turbo tank no longer depend on the frame rate from 25 FPS up |
+| 14 | The menu no longer stops at startup, and the turbo and the smoke keep working, when Windows has been running for 24.9 to 49.7 days |
 
 ## Patch part 1: display-mode table
 
@@ -71,7 +72,7 @@ file offset 0x1B3798 -> VA 0x005B3798
 
 `menu.exe` changes the display mode while it runs, but puts it back before it exits, and the launcher only starts `spel.dat` after that.
 
-It then writes `W` and `H` as 32-bit values to the current mode and all 16-bit entries of the game's mode tables, whichever one `RESOLUTION` in `raser.ini` selects:
+It then writes `W` and `H` as 32-bit values to the current mode and to the 11 entries of the game's mode table at `0x5B37B0` from 640×480 up, at 8, 16 and 24 bits. That covers every `RESOLUTION` in `raser.ini` except the 320×200 ones, 0, 5 and 6:
 
 ```text
 0x005B3798  0x005B37EC  0x005B3800  0x005B3814  0x005B3864  0x005B3878
@@ -160,7 +161,7 @@ The first instruction becomes a call to `set_horizontal_view` in the added code,
 | `0x0C0E8A` | `0x004C0E8A` | `C7 46 14 00 00 80 BF` | `E8 84 48 0B 00 90 90` |
 | `0x0C0E96` | `0x004C0E96` | `C7 46 1C 00 00 00 40` | `90 90 90 90 90 90 90` |
 
-v1.2.0 and older wrote the values into these instructions, so a patcher only checks the first three bytes there.
+Only the opcodes are checked there. A `spel.dat` from v1.2.0 or older is rebuilt from the copy in `4x3_backup`.
 
 ## Patch part 4: texture memory crash fix
 
@@ -214,7 +215,7 @@ So the patch replaces the start of the function with "store 64 MB and return", a
 |---:|---:|---|---|
 | `0x0BC0F0` | `0x004BC0F0` | `B8 00 10 00 00 E8 06 D3 09 00 53` | `C7 81 A1 02 00 00 00 00 00 04 C3` |
 
-Both callers pass the object in `ecx` and ignore the return value. The texture cache is still sized by `custom_texture_memory` from `game.ini` (4 MB as shipped, 8 MB after the menu's Texture detail setting), which is far below 64 MB. With `DEBUGON=1` the game's own `debug.txt` confirms it:
+Both callers pass the object in `ecx` and ignore the return value. The texture cache is still sized by `custom_texture_memory` from `game.ini` (4,000,000 bytes as shipped; the menu's Texture detail setting writes 2, 8 or 16 MB), which is far below 64 MB. With `DEBUGON=1` the game's own `debug.txt` confirms it:
 
 ```text
 Available texture memory: 4000000   (Real texture memory: 67108864)
@@ -258,7 +259,7 @@ The code is in [`A2Racer4Fixes_source/spel_patch.asm`](A2Racer4Fixes_source/spel
 1. **Format:** the game selects the alpha format with the most alpha bits, which it never uses. The selection now prefers the fewest, normally A1R5G5B5. At init the game asks for `16BPP_RGB`; if a 16-bit alpha format exists, the patch asks for `16BPP_ALPHA` instead, sets `ALPHATESTENABLE = 1`, `ALPHAFUNC = GREATER`, `ALPHAREF = 0` and turns `COLORKEYENABLE` off. Without such a format everything behaves as before.
 2. **Texels:** both color converters end by setting the alpha mask on any result other than 0. Other surfaces have an alpha mask of 0, so they are unaffected.
 3. **Vertex alpha:** `D3DTBLEND_MODULATE` takes alpha from a texture that has it and ignores vertex alpha, which would make shadows and clouds opaque. All 18 `ALPHABLENDENABLE` call sites go through a helper that also selects `D3DTBLEND_MODULATEALPHA` while blending is on and `D3DTBLEND_MODULATE` when it is off.
-4. **Alpha 0 that must stay visible:** skidmarks and the radar use the inverted `INVSRCALPHA / SRCALPHA` blend, where fresh marks have alpha 0, and objects have blend modes such as `ONE / INVSRCCOLOR`. At those three "on" sites (`0x044523C`, `0x044275E`, `0x0B5E50`) the helper turns the alpha test off until blending is switched again.
+4. **Alpha 0 that must stay visible:** skidmarks and the radar use the inverted `INVSRCALPHA / SRCALPHA` blend, where fresh marks have alpha 0, and objects have blend modes such as `ONE / INVSRCCOLOR`. At those three "on" sites (the calls at `0x0044523C`, `0x0044275E` and `0x004B5E50`, table rows `0x04523A`, `0x04275C` and `0x0B5E4D`) the helper turns the alpha test off until blending is switched again.
 5. **Viewport clear:** the alpha test is off during `IDirect3DViewport2::Clear`.
 
 ### Why the color key has to be off
@@ -290,9 +291,9 @@ The optional `[CDCHECK]` section the game can read from `game.ini` is not in the
 
 ## Patch part 8: deeper Z-buffer
 
-Where surfaces lie close together, the game flickers. `FUN_004C0610` creates the Z-buffer with the depth its caller passes, always 16 bits, and the view runs from 10 to 12500 (`FUN_004B39D0`). Depth precision falls with distance as roughly `z² / (near × 2^bits)`, so at 16 bits two surfaces about 1.5 units apart at distance 1000 can already swap places from frame to frame. Forcing a 24-bit or 32-bit Z-buffer with dgVoodoo removes the flickering.
+Where surfaces lie close together, the game flickers. `FUN_004C0610` creates the Z-buffer with the depth its caller passes, always 16 bits, and in a race the view runs from 0.5 / 0.375 ≈ 1.33 to 12500 (`FUN_0044C200` through `FUN_004B39D0`). Depth precision falls with distance as roughly `z² / (near × 2^bits)`, so at 16 bits two surfaces about 11 units apart at distance 1000 can already swap places from frame to frame. Forcing a 24-bit or 32-bit Z-buffer with dgVoodoo removes the flickering.
 
-The call to `IDirectDraw::CreateSurface` at VA `0x004C0679` now goes to `create_zbuffer` in the added code, which tries 24 bits, then 32, then the original 16. The game never reads the Z-buffer itself, so nothing else depends on its depth.
+The call to `IDirectDraw::CreateSurface` at VA `0x004C067D`, `0x004C067B` after patching, now goes to `create_zbuffer` in the added code, which tries 24 bits, then 32, then the original 16. The game never reads the Z-buffer itself, so nothing else depends on its depth.
 
 This only happens from Windows Vista on (`GetVersion` major version 6 or higher). Cards from the Windows 9x and XP period could accept a Z-buffer of another depth than a 16-bit screen when it is created and only fail when drawing, so those systems keep 16 bits and keep the flickering.
 
@@ -315,7 +316,7 @@ fstp  float ptr [esi+0xc]       ; time step
 fstp  float ptr [esi+8]         ; time, rounded to a float
 ```
 
-A float has 24 bits, so its resolution falls as uptime grows: 3.9 ms after 9 hours, 62.5 ms after 6 days, 250 ms after 24 days. Every frame's time step is then wrong by up to half of that, can be negative, and the average of the last four frames doesn't hide it. Windows 8 and newer don't reset the uptime on a normal shutdown with Fast Startup on, so long uptimes are common. `FUN_004A6800`, which about 240 places in the game use, also returns 0.1 seconds for a step of 0 or above 0.1, and passes negative steps on.
+A float has 24 bits, so its resolution falls as uptime grows: 3.9 ms after 9 hours, 62.5 ms after 6 days, 250 ms after 24 days. Every frame's time step is then wrong by up to half of that, can be negative, and the average of the last four frames doesn't hide it. Windows 8 and newer don't reset the uptime on a normal shutdown with Fast Startup on, so long uptimes are common. `FUN_004A6800`, which the game calls in 208 places, also returns 0.1 seconds for a step of 0 or above 0.1, and passes negative steps on.
 
 Measured at a fixed 60 FPS, with only the uptime faked (true step 0.01667):
 
@@ -367,7 +368,7 @@ So a force that `FUN_004A5C70` sets once per frame works at full strength on the
 
 ### Pushes per frame
 
-`FUN_00428950` (traffic) and `FUN_00415E40` (vehicles on a fixed path) run every frame and work out everything from the mass, without a time step: the thrust of `0.8 × mass` through the controller, a push of `-mass × sideways speed`, and a downforce of `mass × |speed| × 0.12`. Trailers push the same way through `FUN_004A97F0`.
+`FUN_00428950` (traffic) and `FUN_00415E40` (vehicles on a fixed path) run every frame and work out everything from the mass, without a time step: a thrust through the controller of `0.8 × mass` for traffic, and `0.013 × gas × mass` for a fixed path, so up to `1.3 × mass`, a push of `-mass × sideways speed`, and a downforce of `mass × |speed| × 0.12`. Trailers push the same way through `FUN_004A97F0`, in code that can't be reached (part 13).
 
 The thrust acts below the centre of mass (Ipion's y axis points down, and these vehicles attach their force at y = +0.55 up to +1.60), so every firing pitches the nose up. As a rough model, with the tail as a pivot, the nose stays down as long as `acceleration × height < 9.81 × distance to the axle`. For a car that is at about 35 units/s², so about 45 FPS, and for a truck it is at about 23 units/s², so about 30 FPS. Above that the nose comes up until the game's own check `up.y >= 0.9` cuts the force. Above 66 FPS the thrust stops growing while the downforce doesn't, which brings the nose down again. That gives a peak at 60 to 75 FPS, where every PC with a 60 Hz display sits, as the table below shows. The vehicle also lifts on flat road with nothing near it, and it's then a ramp for what comes after it.
 
@@ -377,7 +378,7 @@ The thrust acts below the centre of mass (Ipion's y axis points down, and these 
 frame_share = min(1, time step × 25)
 ```
 
-Every force and push in those functions comes from that mass, so this scales all of them. `trailer_push` does the same for trailers. A frame at 25 FPS or slower gets one whole push, as it always did. The rate 25 comes from the game itself: it's the factor in its turbo formula, the one force it did scale by time. It also keeps the thrust of even the trucks below the point above. A rate of 30 gave twice the nose-up (0.19 mean, 0.28 highest at 60 FPS).
+Every force and push in those functions comes from that mass, so this scales all of them. `trailer_push` does the same for trailers, which can't be reached. A frame at 25 FPS or slower gets one whole push, as it always did. The rate 25 comes from the game itself: it's the factor in its turbo formula, the one force it did scale by time. It also keeps the thrust of the traffic in `FUN_00428950`, trucks included, below the point above. A fixed path at full gas, in `FUN_00415E40`, still goes over it. A rate of 30 gave twice the nose-up (0.19 mean, 0.28 highest at 60 FPS).
 
 ### The pedals
 
@@ -392,9 +393,9 @@ Above 300 FPS the step is below 1 and rounds away. The car then stays where it i
 
 ### The frame limit
 
-`frame_limit` replaces the timer call at the start of every frame (`0x0044CB9E`) and waits until 1/240 of a second has passed. The game doesn't import `Sleep`, so it waits actively, as the unlimited game did anyway. A display at a lower refresh rate keeps the frame rate lower through vertical sync.
+`frame_limit` replaces the timer call at the start of every frame (`0x0044CB9E`) and waits until 1/240 of a second has passed. Since part 13 it also sets the 25 Hz tick there. The game doesn't import `Sleep`, so it waits actively, as the unlimited game did anyway. A display at a lower refresh rate keeps the frame rate lower through vertical sync.
 
-Nothing that was checked needs it any more. A sweep of the code for time steps that go through `__ftol` found one whole number step that breaks in this range: the fade of a trailer in `FUN_00430EA0` is `(int)(alpha + dt × 128)` and stopped above 128 FPS, so `trailer_fade` keeps what is rounded off, like the pedals. The other steps are frame counts of the form `(int)(seconds / dt)`, which are fine at any rate, and whole milliseconds per frame in `FUN_00469C60`, which round to nothing at 1000 FPS. The limit keeps the game far from that, and inside the range the physics were measured in. [Part 13](#patch-part-13-what-still-counted-frames) found more that this sweep missed. `FUN_0043C890`, the fuel station camera, writes `(int)(2 / dt)` steps into an array for 100, but nothing calls it. Ipion interpolates positions to the current time, so frames between physics steps do show movement.
+Nothing that was checked needs it any more. A sweep of the code for time steps that go through `__ftol` found one whole number step that breaks in this range: the fade of a trailer in `FUN_00430EA0` is `(int)(alpha + dt × 128)` and would stop above 128 FPS, so `trailer_fade` keeps what is rounded off, like the pedals. Part 13 found that this code can't be reached. The other steps are frame counts of the form `(int)(seconds / dt)`, which are fine at any rate, and whole milliseconds per frame in `FUN_00469C60`, which round to nothing at 1000 FPS. The limit keeps the game far from that, and inside the range the physics were measured in. [Part 13](#patch-part-13-what-still-counted-frames) found more that this sweep missed. `FUN_0043C890`, the fuel station camera, writes `(int)(2 / dt)` steps into an array for 100, but nothing calls it. Ipion interpolates positions to the current time, so frames between physics steps do show movement.
 
 ### Measurements
 
@@ -474,7 +475,7 @@ Under that bridge part the car looks lifted, and it can't drive because nothing 
 
 ### At 51 and 165 FPS
 
-These hang-ups also happen at 51 FPS, at the same spots, so this part concluded that they had nothing to do with the frame rate. That was too quick. Cars that really get caught happen at any frame rate, but [part 12](#patch-part-12-contacts-that-outlive-their-triangle) shows that the contacts that hold a car up past the end of a triangle only happen from 66 FPS on. Two 900 second runs with the same bot:
+These hang-ups also happen at 51 FPS, at the same spots, so this part concluded that they had nothing to do with the frame rate. That was too quick. Cars that really get caught happen at any frame rate, but [part 12](#patch-part-12-contacts-that-outlive-their-triangle) shows that the contacts that hold a car up past the end of a triangle happen mostly from 66 FPS on: 0 to 3 per race below that, 21 to 30 above 100 FPS. Two 900 second runs with the same bot:
 
 | | 165 FPS | 51 FPS |
 |---|---|---|
@@ -562,7 +563,7 @@ The measurements below show this directly. With the same bot on the same stage, 
 
 A contact that survives keeps pressing the body against an invisible extension of its triangle. A contact can only push, so the planes that fall away from the car let go by themselves. The ones that last are the ones that rise in front of it. The car climbs them nose first until its front wheels are off the road, and most of the drive is on those wheels. This is the report that started part 9: the front pulls up out of nowhere and the car can't drive any further.
 
-It needs no reset and no hit. In one race at section 238 of etappe 5, at 233 FPS:
+It needs no reset and no hit. In one race at section 238 of etappe 5, at the limit of 240:
 
 ```text
 150.08 s  pos(-3445.0 87.9 7744.2)  forward y 0.03  speed 20.5  body on a triangle of chunk_238, 23 units past it, pressure 23524
@@ -620,7 +621,7 @@ Whole races with the same bot, all five cars on the track scanned every 0.25 sec
 | this patch | 5 | 122 to 146 | 0, 0, 0 | 10.6, 7.4, 9.7 |
 | this patch | 0, 1, 2, 3, 4, 4, 6, 7, 8 | 101 to 127 | 0 on every one | 7 to 39 |
 
-The contacts tell the story. The time with a nose up mostly comes from hits, which the bot has plenty of: most of what remains is the car running into traffic or riding up onto a truck at full speed, and it says more about the bot than about the physics. The 38 seconds on etappe 4 are its fourth racer, which drives back and forth across the road near the start for the whole race. It does the same on v1.5.0.
+The contacts tell the story. The time with a nose up mostly comes from hits, which the bot has plenty of: most of what remains is the car running into traffic or riding up onto a truck at full speed, and it says more about the bot than about the physics. The most, on etappe 4, comes from its fourth racer, which drives back and forth across the road near the start for the whole race. It does the same on v1.5.0.
 
 Tests with a test build that can place a car, under Wine:
 
@@ -657,7 +658,7 @@ Parts 9 and 12 took the frame rate out of the car physics. For this part the who
 
 ### What was already fine
 
-World time, steering, gas and brake ramps, racer and traffic speed, gears, wheel forces, laps, the race clock, money, game over and arrest timers, engine and skid sounds, the speedometer and the fixed-step physics. Steering from -100 to +100 took 3.01 s, gas from 0 to 100 1.33 s and the brake from 0 to 100 1.8 s at all four limits, and world time matched the clock at all of them.
+World time, steering, gas and brake ramps, racer and traffic speed, gears, wheel forces, laps, the race clock, money, game over and arrest timers, engine and skid sounds, the speedometer and the fixed-step physics. The player's ramps follow time: each steering key moves `2 × dt` per frame, so from -100 to +100 takes 0.5 s, the gas rises 300 per second and the brake 320, and part 9 keeps what rounding takes off. With held keys the gas took 0.33 s from 0 to 100 and the brake 0.31 to 0.33 s, at 30 and at 240 FPS alike. World time matched the clock at every limit measured.
 
 Positions don't judder above 66 FPS either: the world interpolates them between physics steps. The trailer code can't be reached: nothing calls or points at `FUN_00431320`, so `trailer_push` and `trailer_fade` from part 9 never run. They do no harm and stayed in.
 
@@ -665,15 +666,15 @@ Positions don't judder above 66 FPS either: the world interpolates them between 
 
 | What | Where | What the game does | Result |
 |---|---|---|---|
-| Police brake | `FUN_00407D90`, `FUN_00407ED0`, `FUN_00408030`, `FUN_00408E10` | `FUN_004037A0` sets the brake to 0, then these add `dt × 400` (or 200) in the same frame, so the brake is one frame's amount | 13.3 at 30 FPS, 2.4 at 165: a chasing car hardly slows down, and runs into or past its target. On the six stages with police |
-| Supercop reverse | `FUN_0041F5E0` at `0x0041F7F9`, `FUN_004200E0` at `0x004204B3` | `pedal = dt × 800`, not added up | 26.7 at 30 FPS, 4.85 at 165: from about 120 FPS it gives up on getting free after 1 second. Stages 1, 3 and 4 |
+| Police brake | `FUN_00407D90`, `FUN_00407ED0`, `FUN_00408030`, `FUN_00408E10` | `FUN_004037A0` sets the brake to 0 while the car is below its target speed, which it mostly is, then these add `dt × 400` (or 200) in the same frame, so the brake is one frame's amount | 13.3 at 30 FPS, 2.4 at 165: a chasing car hardly slows down, and runs into or past its target. On the six stages with police |
+| Supercop pedals | `FUN_0041F5E0` at `0x0041F7F9`, reversing to get free; `FUN_004200E0` at `0x004204B3`, braking in front of its target. Since v1.5.3 also `0x0041F8DB`, forward for one frame while getting free, and `FUN_00420CA0` at `0x00420E15`, gas while ramming, which the turbo sets to 100 anyway | `pedal = dt × 800`, not added up | 26.7 at 30 FPS, 4.85 at 165: from about 120 FPS it gives up on getting free after 1 second. Stages 1, 3 and 4 |
 | Supercop patrol | `FUN_004060D0` | Gas ±1 per frame | From full gas to none takes 3.3 s at 30 FPS, 0.6 s at 165 |
 | Chase camera | `FUN_004B1380` at `0x004B195F`, `0x004B1974`, `0x004B198D` | Moves a fixed part of the way per frame, with no time step | Vertical time constant 0.32 s at 30 FPS, 0.06 s at 165: it sits closer at speed and passes on every bump |
 | Car lighting | `FUN_004A8200` | `c = (int)(c + (road - c) × dt × k)` per color channel | A step below 1 does nothing going up and loses a whole level going down. A car stays up to 165 levels too dark at 165 FPS when standing, 41 when driving |
 | Skid mark length | `FUN_00444D20` | One section per frame, up to 48 | 1.6 s at 30 FPS, 0.29 s at 165, and the rest of a long slide leaves nothing |
 | Skid mark fade | `FUN_00444F80` | At least 1 alpha per frame | Gone in 1.8 to 5 s at 30 FPS, 0.33 to 0.92 s at 165 |
 | Smoke fade | `FUN_00446730`, `FUN_0043D8F0` | At least 1 alpha per frame, while the size follows time | Visible for 4 s at 30 FPS, 0.8 s at 165, at a quarter of the size |
-| Smoke drift | `FUN_004467F0`, `FUN_0043D970` | Speed × `min(0.99, dt × 15)` per frame (20 for damage smoke): the time step the wrong way around | Moves 0.67 times the car's speed at 30 FPS, 0.067 at 165. At 15 FPS or below it keeps going and shoots far ahead of the car |
+| Smoke drift | `FUN_004467F0`, `FUN_0043D970` | Speed × `min(0.99, dt × 15)` per frame (20 for damage smoke): the time step the wrong way around | Moves 0.67 times the car's speed at 30 FPS, 0.067 at 165. Below 15 FPS for tyre smoke and 20 for damage smoke the factor reaches its limit of 0.99, and the smoke keeps going far ahead of the car |
 | Mud and water | `FUN_00451DD0`, `FUN_004553B0` | 4 new particle systems per frame in a zone, with no time limit | The room for 100 systems is full in 0.83 s at 30 FPS, 0.15 s at 165, and then sparks and debris get refused too. Stages 2, 5, 7 and 8 |
 | Pickup spin | `FUN_00451380` | `PerSecToPerFrame(600)` in its script runs while loading, when the time step is still a default of 0.1, and gives 60 units per frame | 1.8 turns per second at 30 FPS, 9.7 at 165 |
 | Pickup shrink | `bonus.dso` `DoDefault_OnFadeout` | Size × 0.6 per frame | Takes 0.2 s at 30 FPS, 0.036 s at 165 |
@@ -694,7 +695,7 @@ Most of these get what they did at 25 FPS, at any rate above that. It's the same
 |---|---|---|
 | `TICK`, in `frame_limit` | `skid_section`, `skid_fade`, `tyre_smoke_fade`, `damage_smoke_fade`, `mud_spray`, `water_spray`, `pickup_fade`, `animation_step` | Adds up the time step per frame and sets a byte in frames where 0.04 s has passed. Those calls run only in such a frame, so they run 25 times per second. Below 25 FPS that's every frame |
 | `frame_share` | `camera_damping`, `patrol_step`, `pickup_spin`, `particle_spin`, `mail_drift`, `police_brake` | `min(1, dt × 25)`, from part 9 |
-| `long_step` | The Supercop's pedal, the rise of smoke, the time inside `animation_step` | `max(dt, 0.04)` |
+| `long_step` | The Supercop's pedals, the rise of smoke, the time inside `animation_step` | `max(dt, 0.04)` |
 | `camera_damping` | | Replaces a debug print at `0x004B18D4`. Works out `k × s / (1 - k + k × s)` for each axis, with `s` from `frame_share`, and the three FMULs read those. That keeps the distance the camera lags behind a car at a steady speed the same at any rate, which `1 - (1 - k)^s` wouldn't |
 | `color_round` | Car lighting and the portrait outline | Adds a different part of a level before the conversion, each time, from a sequence with even spread. A step of 0.3 then goes through 3 times out of 10, going up or down. It needs no room per car, and it can't pass the target |
 | `police_brake` | | The brake becomes at least what a frame at 25 FPS would add: 16, or 8 at `0x00408ECC`. Where the brake does add up, it goes on doing so |
@@ -706,64 +707,137 @@ What this means for the camera: at speed it sits about as far back as at 25 FPS,
 
 ### Measurements
 
-Under Wine with software rendering at 640x480, with the same bot, on stage 5 unless noted. The bot's route differs between runs, so car lighting, smoke drift and turbo are rough. Another job kept the machine busy during these runs, so the runs with a limit of 60 and 240 FPS reached the rates given.
+Under Wine with software rendering at 640x480, at exact frame limits, with v1.5.1 as "before" and v1.5.2 as "after". Six games ran at once, so the limit of 240 reached about 225 FPS, and 190 to 200 in some runs. The bot drives the player's car along the path of a racer.
 
-| Measure | 15 FPS | 30 FPS | About 48 FPS | About 61 FPS |
-|---|---|---|---|---|
-| Camera distance at speed 30, before | 84.2 | 77.4 | 73.7 | 72.3 |
-| The same, after | 84.0 | 78.3 | 77.9 | 78.9 |
-| Pickup spin in units per second, before | 900 | 1780 | 2615 | 3185 |
-| The same, after | 900 | 1503 | 1489 | 1542 |
-| Steps per second of an animated object, before | 6.7 | 11.7 | 15.7 | 17.4 |
-| The same, after | 6.7 | 10.2 | 10.1 | 10.1 |
-| Vertices added to a skid mark per second, before | | 61 | 81 | 115 |
-| The same, after | | 54 | 55 | 42 |
-| Seconds until a skid mark at alpha 192 is gone, before | 3.6 | 1.8 | 0.9 | 0.8 |
-| The same, after | 3.6 | 2.2 | 2.1 | 2.2 |
-| Alpha of tyre smoke of 1 to 2 s old, before | 86 | 85 | 54 | 37 |
-| The same, after | 86 | 92 | 91 | 82 |
-| How far a puff of tyre smoke moved, before | 653 | 3.4 | 1.9 | 0.5 |
-| The same, after | 5.5 | 19 | 14 | 14 |
-| Player's color, mean of red, green and blue, before | 211 | 195 | 189 | 152 |
-| The same, after | 217 | 209 | 211 | 201 |
+On stage 5, with the bot braking for a second every 5 seconds:
 
-A later run on a less busy machine reached 98 FPS before and after: pickups spun at 4328 units per second before and 1503 after, and animated objects took 19.7 steps per second before and 10.2 after.
+| Measure | 15 FPS | 30 | 60 | 120 | 165 | 240 |
+|---|---|---|---|---|---|---|
+| Pickup spin in units per second, before | 907 | 1809 | 3565 | 7224 | 9873 | 11530 |
+| After | 903 | 1513 | 1480 | 1497 | 1508 | 1506 |
+| Vertices added to a skid mark per second, before | 30 | 60 | 119 | 232 | 304 | 423 |
+| After | 30 | 50 | 51 | 53 | 55 | 52 |
+| Seconds until a skid mark that starts at alpha 200 is gone, before | 3.6 | 1.8 | 0.9 | 0.5 | 0.3 | 0.2 |
+| After | 3.6 | 2.2 | 2.2 | 2.2 | 2.2 | 2.2 |
+| Alpha of tyre smoke 1 to 2 seconds old, out of 128, before | 86 | 85 | 39 | 0 | 0 | 0 |
+| After | 86 | 92 | 91 | 91 | 91 | 91 |
+| Steps per second of an animated object, before | 6.7 | 11.8 | 17.3 | 21.7 | 23.3 | 23.1 |
+| After | 6.7 | 10.1 | 10.1 | 10.1 | 10.1 | 10.1 |
+| Camera distance at speed 20, before | 83.5 | 77.1 | 74.1 | 72.4 | 72.0 | 71.6 |
+| After | 83.5 | 78.5 | 78.7 | 78.8 | 78.9 | 78.7 |
 
 The camera distance is corrected for the one frame between the game moving the car and moving the camera, which a reading between frames sees. Without that a slower frame rate looks about 6 units further away than it is.
 
-On stage 1:
+With the test build that can place the player's car, standing still on stage 5:
 
-| Measure | Before | After |
-|---|---|---|
-| Median brake of chasing police | 13.3 at 30 FPS, 7.9 at 50, 7.2 at 55 | 16.0 at 30, 57, 60 and 59 FPS |
-| Mean reverse pedal of the Supercop | 14.2 at 55 FPS | 30.1 at 30 FPS, 31.5 at 59 |
+| Measure | 15 FPS | 30 | 60 | 120 | 165 | 240 |
+|---|---|---|---|---|---|---|
+| Car light 20 seconds after moving from a dark spot at 69 to a light one at 247, before | 233 | 218 | 188 | 129 | 89 | 69 |
+| After | 247 | 247 | 247 | 247 | 247 | 247 |
+| Seconds for the camera's sideways lag to fall to 37% after the car moves 25 units, before | 0.67 | 0.40 | 0.20 | 0.13 | 0.11 | 0.07 |
+| After | 0.71 | 0.45 | 0.44 | 0.44 | 0.41 | 0.43 |
+| Seconds until a mud zone fills the room for 100 particle systems, before | 1.6 | 0.8 | 0.4 | 0.2 | 0.15 | 0.10 |
+| After | 1.6 | 0.93 | 0.96 | 0.96 | 0.94 | 0.96 |
+| Seconds for a pickup that was taken to shrink to 5% of its size, before | 0.40 | 0.20 | 0.10 | 0.05 | 0.036 | 0.025 |
+| After | 0.40 | 0.23 | 0.22 | 0.22 | 0.22 | 0.22 |
 
-A full turbo tank with the bot holding the key, worked out from how fast it drains: 10.6 s, 11.8, 11.0 and 11.0 before, 10.0, 10.0, 10.2 and 10.0 after, at 30 and at 46 to 50 FPS. `GetTickCount` steps by 1 ms under Wine, so the larger difference in the table above doesn't show here.
+The camera's times include a frame or two between the move and the first reading. The worked-out value from 25 FPS up is 0.36 s.
 
-The new code also ran on all nine stages at 48 to 75 FPS for 60 seconds each, with no error, and it passed mud, water, pickups and speed cameras there.
+On stage 1, with police and with the player's damage held above the limit for smoke. The limit of 240 reached 164 to 168 FPS here:
+
+| Measure | 15 FPS | 30 | 120 | 240 limit |
+|---|---|---|---|---|
+| Median brake of chasing police, before | 26.7 | 13.3 | 3.3 | 2.45 |
+| After | 26.7 | 16 | 16 | 16 |
+| Seconds damage smoke stays visible, before | 3.3 | 4.1 | 1.0 | 0.74 |
+| After | 5.6 | 4.9 | 4.9 | 4.9 |
+
+After the change, the police brake was 16 at 60 and 165 FPS as well. On stage 2, with speed cameras, the flash was shown for one frame at every rate before. With v1.5.3, which doesn't differ from v1.5.2 here, it lasted 36 to 44 ms from 30 FPS up: 1 or 2 frames at 30 FPS, 3 at 60, 4 or 5 at 120, and 4 to 7 at 165. At 15 FPS it is still one frame. A full turbo tank, with the bot holding the key, lasted 13.3 s at 15 FPS and 10.0 to 10.3 s from 30 FPS up before, and 10.0 s at every rate after. `GetTickCount` steps by 1 ms under Wine, so the 12.4 s worked out above for 30 FPS doesn't show here. The Supercop never got stuck long enough in these races to try to get free.
+
+Smoke and the turbo tank changed below 25 FPS as well. At 15 FPS tyre smoke moved 244 units on average before, and 3 after.
+
+The new code also ran on all nine stages for 150 seconds each at the limit of 240, with no error, and with no contact past its triangle (part 12). With Wine set to Windows XP, so in a 16-bit display mode, a race on stage 2 ran at 60 FPS with a working flash.
 
 ### Left as it is
 
-- `FUN_004AA0C0` steps the world by the mean time step of the last 50 frames. It has no lasting error, but after a sudden change in frame rate the world runs at another pace for a moment: from 165 to 60 FPS it starts at 36% and is back after 0.8 s.
+- `FUN_004AA0C0` steps the world by a running average of the time step, `avg = (49 × avg + dt) / 50`. It has no lasting error, but after a sudden change in frame rate the world runs at another pace for a moment: from 165 to 60 FPS it starts at 36%, and is within 5% after about 2 seconds. How long that takes depends on the frame rate, as it counts 50 frames. A weight that follows the time step instead would make the world drift away from the clock when the frame rate keeps changing, so this stays.
 - Path objects such as planes and helicopters take their number of frames from the time step when they start, the form part 9 calls fine. A slow frame at exactly that moment makes one run too fast. Rare, and only looks.
 - The number of particles in a system falls with the time step, at 4 per dirt system at 30 FPS and 13 at 165. It's the game's own rule for slow PCs, and more isn't worse.
 - Traffic comes back with a chance of 20% per frame, but the rules for free space decide nearly everything. Below 15 FPS on the smoothed time step it doesn't come back, as the game intends.
 - The alert lamp of a Supercop goes off 14 frames after it leaves: 0.47 s at 30 FPS, 0.085 s at 165.
 - Police lights, the helicopter rotor, the game over orbit and the finish flag use whole steps, with at most a few percent of difference.
-- The 60 ms wait between damage from hits uses the real time, so below about 17 FPS sustained contact can do damage every frame.
+- The 60 ms wait between damage from hits uses the real time, so below about 17 FPS sustained contact can do damage every frame. The total damage of all cars after 90 seconds on stage 2 showed no rise at 15 FPS: 2054 and 528 in two races at 15 FPS, 824 to 2199 at 30 to 240 FPS.
 
 ### What this doesn't establish
 
-- The numbers are from Wine with software rendering, with a bot. The author tested the build in-game before the release, without these measurements.
-- With the machine busy nothing above 98 FPS could be measured for this part. Each of these fixes follows from the time step or the tick, so nothing depends on the rate above 25 FPS, but that is inferred for 120 to 240 FPS.
-- The damage smoke wasn't seen in these runs: the numbers above are for tyre smoke, and the damage smoke takes the same route with other constants.
+- The numbers are from Wine with software rendering, with a bot and test placements. The author tested the build in-game before the release, without these measurements.
+- With six games at once the limit of 240 reached about 165 to 225 FPS, not 240 itself.
 - Whether 25 FPS is how the game was meant to look isn't known. It's the one rate the game's own code points at.
+
+## Patch part 14: a long Windows uptime
+
+`GetTickCount` gives the milliseconds since Windows started, as a 32-bit number. Windows 8 and newer don't reset it on a normal shutdown with Fast Startup on, as part 9 found for the other clock. From 2^31 ms, 24.9 days, to 2^32 ms, 49.7 days, that number is negative when it is read as a signed number, and after that it starts again from 0. Part 9 took the time step off another counter. The race still uses `GetTickCount` in 30 places, and the menu in 4.
+
+### The menu
+
+`menu.exe` is written in Delphi, with range checks on. Its log, `MenuTrac.log`, which it always writes, keeps its start time in a signed integer (`FUN_0045F4F8`):
+
+```asm
+0045f544  call GetTickCount
+0045f549  test eax,eax
+0045f54b  jns  0x0045f552
+0045f54d  call 0x00402ed0        ; range check error
+```
+
+From 24.9 days on, that raises an exception right at the start, and the game never reaches its first screen. Under Wine, with `GetTickCount` moved forward to 30 days, the menu stopped with exception `0x0EEDFADE`, the code of a Delphi exception. At 0 days it ran as usual. The patch makes this `jns` a `jmp`. It does the same with the overflow check where each log line works out how long the log has run, `jno` to `jmp` at `0x0045F6CB`, which the same number can trip when 24.9 days pass while the menu is open.
+
+### The race
+
+The race compares most of these times without a sign. Three compare `(int)(now - last)`, with `last` starting at 0, so from 24.9 days on the difference is negative and the test never passes:
+
+| Where | What | Effect from 24.9 days on |
+|---|---|---|
+| `FUN_0044E970`, `0x0044E9CF` | The turbo, one unit of the tank per 100 ms | The turbo does nothing |
+| `FUN_0044E830`, `0x0044E85C` | Tyre smoke and brake dust, at most every 100 ms | None ever appears |
+| `FUN_00426530`, `0x00426565` | Damage smoke, at most every 200 ms per car | None ever appears |
+
+These become unsigned compares: `jl` to `jb`, and `jle` to `jbe`. The communicator keeps its own times as signed numbers, and starts the blink of the Supercop's alert lamp at 0, so that lamp stopped blinking and beeping. `game_ticks` gives it a count that starts at 1 when it first asks, at `0x0048AC02`.
+
+The other uses are fine: unsigned compares, times that are set before they are compared, the race clock in `FUN_00448470`, which only uses differences, and the 5-second wait of the Enter key, which converts the count to a float that is still precise to about a quarter of a second at this point.
+
+### Measurements
+
+Under Wine, with every call to `GetTickCount` in a test build sent through a function that adds a fixed amount, on stage 2 at 60 FPS, with the bot holding the turbo and the player's damage held above the limit for smoke:
+
+| Uptime | v1.5.1: turbo tank | Tyre puffs | Damage puffs | v1.5.3: turbo tank | Tyre puffs | Damage puffs |
+|---|---|---|---|---|---|---|
+| 0 days | 10.0 s | 160 | 370 | 10.4 s | 161 | 371 |
+| 30 days | not used | 0 | 0 | 10.0 s | 140 | 371 |
+
+A race that starts before 24.9 days and runs past it was fine before too, as the times get set first.
+
+The menu, through the launcher, with the same change to `menu.exe`:
+
+| Uptime | v1.5.2 | v1.5.3 |
+|---|---|---|
+| 0 days | runs | runs |
+| 30 days | exception at the start | runs |
+| Starting just past 24.9 days | exception at the start | runs |
+| Running across 24.9 days, and across the wrap at 49.7 days | runs | runs |
+
+### Not covered
+
+- Three overflow checks in the menu's timer queue, in `FUN_0045B2D0` and `FUN_0045B494`, can stop it in the few seconds when the count wraps around at 49.7 days. Without them the queue would fire the same event over and over instead, so they stay. In the test across the wrap the menu kept running.
+- A race running at the very moment the count wraps can keep the Enter key waiting, as its wait compares floats of the count. Each race is its own process, so the next one is fine.
+- All of this ran under Wine, with the count moved forward in a test build. The author tested the build in-game before the release, with no figures on the uptime.
 
 ## All added and changed bytes
 
-The added code is built from [`A2Racer4Fixes_source/spel_patch.asm`](A2Racer4Fixes_source/spel_patch.asm). It goes in unused space at the end of `.text`, file offset `0x175500`, VA `0x00575500`, and the section's virtual size is raised so that space is certainly mapped. That space must be all zero before patching. A `spel.dat` from v1.2.0 has older code there, so the patcher starts from the copy in `4x3_backup` in that case.
+This has every change from the parts above, apart from the bytes that parts 2 to 5 describe themselves and the changes to `menu.exe` in parts 7 and 14.
 
-2728 bytes at `0x175500`:
+The added code is built from [`A2Racer4Fixes_source/spel_patch.asm`](A2Racer4Fixes_source/spel_patch.asm). It goes in unused space at the end of `.text`, file offset `0x175500`, VA `0x00575500`, and the section's virtual size is raised so that space is certainly mapped. That space must be all zero before patching. Both section sizes are raised: `.text` to `0x175000`, and `.data` from `0x1C4408` to `0x1C5000`, for the variables at `0x751F00` and up. A `spel.dat` patched by v1.2.0 to v1.5.2 has older code there, and one patched by v1.1.1 or older has other bytes where this patch checks, so in both cases the patcher starts from the copy in `4x3_backup`.
+
+2756 bytes at `0x175500`:
 
 ```text
 83 7C 24 04 03 75 60 A1 26 B8 73 00 83 F8 FF 74 56 69 C0 B0 00 00 00 03
@@ -780,13 +854,13 @@ B4 B4 73 00 50 8B 08 FF 51 5C 6A 05 6A 19 A1 B4 B4 73 00 50 8B 08 FF 51
 8B 08 FF 51 58 6A 00 6A 0F A1 B4 B4 73 00 50 8B 08 FF 51 5C FF 74 24 14
 FF 74 24 14 FF 74 24 14 FF 74 24 14 8B 04 24 8B 08 FF 51 30 5A 50 52 6A
 0F A1 B4 B4 73 00 50 8B 08 FF 51 5C 58 C2 10 00 8B 44 24 04 8B 08 FF 61
-30 60 68 DF 5E 57 00 FF 15 A0 60 57 00 89 C6 85 F6 74 12 68 FF 5E 57 00
-56 FF 15 FC 60 57 00 85 C0 74 02 FF D0 8B 1D A8 5F 57 00 8B 2D AC 5F 57
+30 60 68 FB 5E 57 00 FF 15 A0 60 57 00 89 C6 85 F6 74 12 68 1B 5F 57 00
+56 FF 15 FC 60 57 00 85 C0 74 02 FF D0 8B 1D C4 5F 57 00 8B 2D C8 5F 57
 00 85 DB 75 61 81 EC 9C 00 00 00 89 E7 B9 27 00 00 00 31 C0 F3 AB 66 C7
-44 24 24 9C 00 85 F6 74 2B 68 EA 5E 57 00 56 FF 15 FC 60 57 00 85 C0 74
+44 24 24 9C 00 85 F6 74 2B 68 06 5F 57 00 56 FF 15 FC 60 57 00 85 C0 74
 1B 54 6A FF 6A 00 FF D0 85 C0 74 10 8B 5C 24 6C 8B 6C 24 70 85 DB 74 04
 85 ED 75 14 6A 00 FF 15 F4 61 57 00 89 C3 6A 01 FF 15 F4 61 57 00 89 C5
-81 C4 9C 00 00 00 BE 78 5F 57 00 B9 0C 00 00 00 AD 89 18 89 68 04 E2 F8
+81 C4 9C 00 00 00 BE 94 5F 57 00 B9 0C 00 00 00 AD 89 18 89 68 04 E2 F8
 8D 04 AD 01 00 00 00 31 D2 B9 03 00 00 00 F7 F1 A3 38 1F 75 00 61 E9 CD
 29 EE FF 50 A1 98 37 5B 00 8D 04 40 50 DB 04 24 A1 9C 37 5B 00 C1 E0 02
 89 04 24 DA 34 24 58 D9 C0 D9 E0 D9 5E 14 DC C0 D9 5E 1C 58 C3 FF 74 24
@@ -795,11 +869,11 @@ FF 74 24 14 FF 74 24 14 FF 74 24 14 8B 04 24 8B 08 FF 51 30 5A 50 52 6A
 C1 50 DB 04 24 58 8B 4C 24 10 D8 01 D9 19 58 C2 0C 00 A1 98 37 5B 00 8D
 04 40 8B 0D 9C 37 5B 00 8D 14 8D 00 00 00 00 29 D0 69 C0 40 1F 00 00 6B
 C9 63 89 CA D1 EA 85 C0 79 02 F7 DA 01 D0 99 F7 F9 C3 56 57 89 C6 83 EC
-40 89 E2 6A 40 52 68 34 A0 5A 00 56 E8 47 E5 F4 FF 83 C4 10 89 E0 BF 12
-5F 57 00 E8 6A 00 00 00 74 58 89 F0 BF 2B 5F 57 00 E8 5C 00 00 00 74 4A
-89 F0 BF 42 5F 57 00 E8 4E 00 00 00 74 3C 89 F0 BF 51 5F 57 00 E8 40 00
-00 00 74 2E 89 E0 BF 1E 5F 57 00 E8 32 00 00 00 74 27 89 F0 BF 60 5F 57
-00 E8 2F 00 00 00 74 19 89 F0 BF 6F 5F 57 00 E8 21 00 00 00 74 0B 31 C0
+40 89 E2 6A 40 52 68 34 A0 5A 00 56 E8 47 E5 F4 FF 83 C4 10 89 E0 BF 2E
+5F 57 00 E8 6A 00 00 00 74 58 89 F0 BF 47 5F 57 00 E8 5C 00 00 00 74 4A
+89 F0 BF 5E 5F 57 00 E8 4E 00 00 00 74 3C 89 F0 BF 6D 5F 57 00 E8 40 00
+00 00 74 2E 89 E0 BF 3A 5F 57 00 E8 32 00 00 00 74 27 89 F0 BF 7C 5F 57
+00 E8 2F 00 00 00 74 19 89 F0 BF 8B 5F 57 00 E8 21 00 00 00 74 0B 31 C0
 EB 0A B8 01 00 00 00 EB 03 83 C8 FF 83 C4 40 5F 5E C3 E8 06 00 00 00 75
 03 80 38 00 C3 57 8A 0F 84 C9 74 17 8A 28 80 FD 61 72 08 80 FD 7A 77 03
 80 ED 20 38 CD 75 04 40 47 EB E3 5F C3 56 8B 74 24 0C FF 15 AC 60 57 00
@@ -814,7 +888,7 @@ A3 18 1F 75 00 C7 05 1C 1F 75 00 01 00 00 00 2B 05 18 1F 75 00 C3 D9 C0
 DC 25 20 1F 75 00 D8 76 04 D9 5E 0C DD 15 20 1F 75 00 D8 76 04 D9 5E 08
 C3 D9 44 24 04 8B 44 24 04 89 41 78 DC 05 28 1F 75 00 DD 15 28 1F 75 00
 D9 51 74 83 EC 08 DD 1C 24 8B 49 14 B8 80 83 4F 00 FF D0 C2 04 00 50 51
-B9 B0 28 71 00 B8 00 68 4A 00 FF D0 D8 0D BB 5E 57 00 D9 E8 D8 D1 DF E0
+B9 B0 28 71 00 B8 00 68 4A 00 FF D0 D8 0D D7 5E 57 00 D9 E8 D8 D1 DF E0
 9E 73 02 D9 C9 DD D8 59 58 C3 D8 3D 18 63 57 00 E8 D1 FF FF FF DE C9 C3
 E8 C9 FF FF FF D9 C0 D8 4C 24 04 D9 5C 24 04 D9 C0 D8 4C 24 08 D9 5C 24
 08 D8 4C 24 0C D9 5C 24 0C 56 89 CE 8B 46 10 68 F6 97 4A 00 C3 89 44 24
@@ -831,14 +905,14 @@ C3 FF 15 AC 60 57 00 8B 15 A0 37 5B 00 83 FA 10 75 09 3C 06 72 05 BA 20
 40 09 C2 41 83 F9 04 72 E6 89 D7 89 E8 2D 7C EA 5C 00 31 D2 B9 94 02 00
 00 F7 F1 83 F8 13 72 05 B8 13 00 00 00 8D 34 85 40 1F 75 00 8B 0D 50 5E
 71 00 01 D9 D9 81 BC 00 00 00 DC C8 D9 81 C0 00 00 00 DC C8 DE C1 D9 81
-C4 00 00 00 DC C8 DE C1 D8 1D CF 5E 57 00 DF E0 9E 73 5F 83 FF 03 75 1D
-8B 41 24 69 C0 A9 00 00 00 03 05 D0 B0 73 00 D9 40 24 D8 1D D3 5E 57 00
-DF E0 9E 73 3D B9 B0 28 71 00 B8 00 68 4A 00 FF D0 D8 06 D9 16 D8 1D D7
+C4 00 00 00 DC C8 DE C1 D8 1D EB 5E 57 00 DF E0 9E 73 5F 83 FF 03 75 1D
+8B 41 24 69 C0 A9 00 00 00 03 05 D0 B0 73 00 D9 40 24 D8 1D EF 5E 57 00
+DF E0 9E 73 3D B9 B0 28 71 00 B8 00 68 4A 00 FF D0 D8 06 D9 16 D8 1D F3
 5E 57 00 DF E0 9E 72 28 6A 00 8B 0D 50 5E 71 00 FF 74 19 34 89 D8 31 D2
 B9 F0 00 00 00 F7 F1 50 B8 A0 E5 40 00 FF D0 83 C4 0C C7 06 00 00 00 00
 61 C2 04 00 C6 41 60 01 81 EC B0 00 00 00 E9 29 01 F9 FF 51 6A 01 B8 10
 29 4F 00 FF D0 59 81 EC D8 00 00 00 E9 7D D5 F7 FF D9 C0 D8 64 24 40 D9
-E1 D8 1D DB 5E 57 00 DF E0 9E 76 21 D9 EE D8 D9 DF E0 9E 74 12 8B 44 24
+E1 D8 1D F7 5E 57 00 DF E0 9E 76 21 D9 EE D8 D9 DF E0 9E 74 12 8B 44 24
 6C 6B C0 50 03 05 B8 5E 71 00 F6 00 04 75 06 DD D8 D9 44 24 40 D8 05 10
 63 57 00 C3 52 8B 44 3A 3C 85 C0 78 1E 3B 05 BC 5E 71 00 7F 16 89 F8 31
 D2 B9 F0 00 00 00 F7 F1 50 B8 20 70 4A 00 FF D0 83 C4 04 5A 8B 4C 3A 10
@@ -850,39 +924,40 @@ D2 89 90 94 00 00 00 89 90 98 00 00 00 89 90 9C 00 00 00 89 50 74 89 50
 35 04 5F 71 00 4E 69 EE 94 09 00 00 C3 E8 D4 FC FF FF 31 C9 D9 E8 D8 A4
 8D 88 00 00 00 D9 84 8D 88 00 00 00 D8 CA DC C1 DE F1 D9 1C 8D 98 1F 75
 00 41 83 F9 03 72 DD DD D8 C3 A1 A4 1F 75 00 05 B9 79 37 9E A3 A4 1F 75
-00 C1 E8 10 50 DB 04 24 58 D8 0D C3 5E 57 00 DE C1 E9 2E 28 FE FF B8 20
+00 C1 E8 10 50 DB 04 24 58 D8 0D DF 5E 57 00 DE C1 E9 2E 28 FE FF B8 20
 4D 44 00 EB 21 B8 80 4F 44 00 EB 1A B8 30 67 44 00 EB 13 B8 F0 D8 43 00
 EB 0C B8 70 B6 45 00 EB 05 B8 D0 B9 45 00 80 3D 90 1F 75 00 00 74 02 FF
 E0 C3 80 3D 90 1F 75 00 00 0F 85 D9 22 F0 FF C2 08 00 80 3D 90 1F 75 00
-00 0F 85 19 3F EF FF 31 C0 C2 04 00 E8 AF 0A F3 FF D8 15 BF 5E 57 00 DF
-E0 9E 73 08 DD D8 D9 05 BF 5E 57 00 C3 E8 96 0A F3 FF D8 0D 58 63 57 00
+00 0F 85 19 3F EF FF 31 C0 C2 04 00 E8 AF 0A F3 FF D8 15 DB 5E 57 00 DF
+E0 9E 73 08 DD D8 D9 05 DB 5E 57 00 C3 E8 96 0A F3 FF D8 0D 58 63 57 00
 EB 0B E8 89 0A F3 FF D8 0D 08 63 57 00 D9 E8 DE E1 C3 E8 F7 FB FF FF D8
 7C 24 04 D8 61 04 D8 54 24 04 DF E0 9E 76 04 D9 54 24 04 DD D8 E9 DE D0
 E8 FF E8 D7 FB FF FF D8 4B 30 51 D9 1C 24 59 8B 53 28 C3 D9 81 CC 00 00
 00 E8 C0 FB FF FF DE C9 DE C1 C3 FF 74 24 08 FF 74 24 08 E8 10 A5 EE FF
-83 C4 08 E8 A6 FB FF FF DE C9 C3 E8 9E FB FF FF D8 0D C7 5E 57 00 D9 E8
-DE E1 DE C9 C3 81 F9 C8 00 00 00 73 03 8D 42 64 A3 40 BA 6F 00 C3 B9 B0
-28 71 00 E8 F8 09 F3 FF D8 05 A8 1F 75 00 D9 15 A8 1F 75 00 D8 1D BF 5E
-57 00 DF E0 9E 0F 93 C0 0F B6 C0 72 07 83 25 A8 1F 75 00 00 C3 83 39 00
-74 46 51 83 EC 08 54 FF 15 58 60 57 00 8B 4C 24 08 DF 2C 24 DF 2D 00 1F
-75 00 DE E9 D8 71 04 D8 1D CB 5E 57 00 DF E0 9E 73 11 A1 00 1F 75 00 0B
-05 04 1F 75 00 74 04 F3 90 EB CB 58 A3 00 1F 75 00 58 A3 04 1F 75 00 59
-E8 83 08 F3 FF B9 B0 28 71 00 E8 79 09 F3 FF D8 05 94 1F 75 00 D8 15 BF
-5E 57 00 DF E0 9E 0F 93 05 90 1F 75 00 72 15 D8 25 BF 5E 57 00 D8 15 BF
-5E 57 00 DF E0 9E 72 04 DD D8 D9 EE D9 1D 94 1F 75 00 C3 00 00 C8 41 0A
-D7 23 3D 00 00 80 37 0A D7 23 3C 89 88 88 3B 00 00 10 40 00 00 00 3F 00
-00 40 40 00 00 C8 41 55 53 45 52 33 32 2E 44 4C 4C 00 45 6E 75 6D 44 69
-73 70 6C 61 79 53 65 74 74 69 6E 67 73 41 00 53 65 74 50 72 6F 63 65 73
-73 44 50 49 41 77 61 72 65 00 53 50 45 45 44 4F 4D 45 54 45 52 00 43 4F
-4D 4D 55 4E 49 43 41 54 4F 52 00 53 54 52 49 4E 47 5F 52 41 43 45 5F 54
-49 4D 45 5F 56 41 4C 55 45 00 53 54 52 49 4E 47 5F 43 55 52 5F 4C 41 50
-00 53 54 52 49 4E 47 5F 43 55 52 5F 50 4F 53 00 4F 56 4C 5F 50 4F 52 54
-52 41 49 54 53 5F 00 50 4C 41 59 45 52 5F 00 90 98 37 5B 00 EC 37 5B 00
-00 38 5B 00 14 38 5B 00 64 38 5B 00 78 38 5B 00 8C 38 5B 00 A0 38 5B 00
-B4 38 5B 00 04 39 5B 00 18 39 5B 00 2C 39 5B 00
+83 C4 08 E8 A6 FB FF FF DE C9 C3 E8 9E FB FF FF D8 0D E3 5E 57 00 D9 E8
+DE E1 DE C9 C3 81 F9 C8 00 00 00 73 03 8D 42 64 A3 40 BA 6F 00 C3 FF 15
+98 61 57 00 8B 0D AC 1F 75 00 85 C9 75 09 8D 48 FF 89 0D AC 1F 75 00 29
+C8 C3 B9 B0 28 71 00 E8 DC 09 F3 FF D8 05 A8 1F 75 00 D9 15 A8 1F 75 00
+D8 1D DB 5E 57 00 DF E0 9E 0F 93 C0 0F B6 C0 72 07 83 25 A8 1F 75 00 00
+C3 83 39 00 74 46 51 83 EC 08 54 FF 15 58 60 57 00 8B 4C 24 08 DF 2C 24
+DF 2D 00 1F 75 00 DE E9 D8 71 04 D8 1D E7 5E 57 00 DF E0 9E 73 11 A1 00
+1F 75 00 0B 05 04 1F 75 00 74 04 F3 90 EB CB 58 A3 00 1F 75 00 58 A3 04
+1F 75 00 59 E8 67 08 F3 FF B9 B0 28 71 00 E8 5D 09 F3 FF D8 05 94 1F 75
+00 D8 15 DB 5E 57 00 DF E0 9E 0F 93 05 90 1F 75 00 72 15 D8 25 DB 5E 57
+00 D8 15 DB 5E 57 00 DF E0 9E 72 04 DD D8 D9 EE D9 1D 94 1F 75 00 C3 00
+00 C8 41 0A D7 23 3D 00 00 80 37 0A D7 23 3C 89 88 88 3B 00 00 10 40 00
+00 00 3F 00 00 40 40 00 00 C8 41 55 53 45 52 33 32 2E 44 4C 4C 00 45 6E
+75 6D 44 69 73 70 6C 61 79 53 65 74 74 69 6E 67 73 41 00 53 65 74 50 72
+6F 63 65 73 73 44 50 49 41 77 61 72 65 00 53 50 45 45 44 4F 4D 45 54 45
+52 00 43 4F 4D 4D 55 4E 49 43 41 54 4F 52 00 53 54 52 49 4E 47 5F 52 41
+43 45 5F 54 49 4D 45 5F 56 41 4C 55 45 00 53 54 52 49 4E 47 5F 43 55 52
+5F 4C 41 50 00 53 54 52 49 4E 47 5F 43 55 52 5F 50 4F 53 00 4F 56 4C 5F
+50 4F 52 54 52 41 49 54 53 5F 00 50 4C 41 59 45 52 5F 00 90 98 37 5B 00
+EC 37 5B 00 00 38 5B 00 14 38 5B 00 64 38 5B 00 78 38 5B 00 8C 38 5B 00
+A0 38 5B 00 B4 38 5B 00 04 39 5B 00 18 39 5B 00 2C 39 5B 00
 ```
 
-After it, at `0x175FA8`, come two 32-bit values: a fixed width and height, or `0` and `0` to follow the display.
+After it, at `0x175FC4`, come two 32-bit values: a fixed width and height, or `0` and `0` to follow the display.
 
 | File offset | Original | Patched | What |
 |---|---|---|---|
@@ -918,7 +993,7 @@ After it, at `0x175FA8`, come two 32-bit values: a fixed width and height, or `0
 | `0x0A6850` | `FF 15 58 60 57 00` | `E8 70 F0 0C 00 90` | timer counter |
 | `0x0A673B` | `FF 15 50 62 57 00` | `E8 D1 F1 0C 00 90` | timer ticks |
 | `0x0A687E` | `FF 15 50 62 57 00` | `E8 8E F0 0C 00 90` | timer ticks |
-| `0x04CB9E` | `E8 5D 9B 05 00` | `E8 8A 92 12 00` | frame limit |
+| `0x04CB9E` | `E8 5D 9B 05 00` | `E8 A6 92 12 00` | frame limit |
 | `0x0A6751` | `D8 76 04 D9 C0 D8 66` | `E8 E0 F1 0C 00 EB 07` | timer step |
 | `0x0A6894` | `D8 76 04 D9 C0 D8 66` | `E8 9D F0 0C 00 EB 07` | timer step |
 | `0x0A45D0` | `D9 44 24 04 D8` | `E9 7C 13 0D 00` | world time |
@@ -966,7 +1041,7 @@ After it, at `0x175FA8`, come two 32-bit values: a fixed width and height, or `0
 | `0x05366A` | `E8 F1 65 01 00` | `E8 CB 26 12 00` | animation |
 | `0x053693` | `E8 C8 65 01 00` | `E8 A2 26 12 00` | animation |
 | `0x069D3C` | `E8 BF CA 03 00` | `E8 0B C0 10 00` | animation |
-| `0x03B1AE` | `B8 01 00 00 00` | `E8 4B AC 13 00` | speed camera flash |
+| `0x03B1AE` | `B8 01 00 00 00` | `E8 67 AC 13 00` | speed camera flash |
 | `0x007EA4` | `E8 D7 AF FF FF` | `E8 D9 DE 16 00` | police brake |
 | `0x007FFE` | `E8 7D AE FF FF` | `E8 7F DD 16 00` | police brake |
 | `0x0080EB` | `E8 90 AD FF FF` | `E8 92 DC 16 00` | police brake |
@@ -992,6 +1067,12 @@ After it, at `0x175FA8`, come two 32-bit values: a fixed width and height, or `0
 | `0x062421` | `E8 BA DE FF FF` | `E8 9D 39 11 00` | debris spin |
 | `0x062436` | `E8 A5 DE FF FF` | `E8 88 39 11 00` | debris spin |
 | `0x06244B` | `E8 90 DE FF FF` | `E8 73 39 11 00` | debris spin |
+| `0x026566` | `8E` | `86` | damage smoke at long uptime |
+| `0x04E85D` | `8C` | `82` | tyre smoke at long uptime |
+| `0x04E9D0` | `8C` | `82` | turbo at long uptime |
+| `0x08AC02` | `FF 15 98 61 57 00` | `E8 F7 B1 0E 00 90` | communicator clock |
+| `0x01F8DB` | `E8 20 6F 08 00` | `E8 6C 64 15 00` | Supercop pedal |
+| `0x020E15` | `E8 E6 59 08 00` | `E8 32 4F 15 00` | Supercop pedal |
 | `0x000248` | `08 44 1C 00` | `00 50 1C 00` | data section size |
 | `0x0001F8` | `4A 44 17 00` | `00 50 17 00` | code section size |
 | `0x0CD478` | `68 70` | `EB B6` | CD check |
@@ -1041,7 +1122,7 @@ This confirms that the `.dat` file is really a Windows executable.
 
 ### Step 3: add the code
 
-Write the code and the two zero values from [All added and changed bytes](#all-added-and-changed-bytes) at file offset `0x175500`, and apply every row of the table there. This covers the startup code, the transparency fix and the CD check in `spel.dat`.
+Write the code and the two zero values from [All added and changed bytes](#all-added-and-changed-bytes) at file offset `0x175500`, and apply every row of the table there. This covers everything except parts 2 to 5: the startup code, the HUD position reads, the transparency fix, the deeper Z-buffer, the physics and frame rate fixes, the 32-bit display mode, the uptime fixes, both section sizes and the CD check in `spel.dat`.
 
 ### Step 4: redirect the aspect division and the HUD
 
@@ -1083,9 +1164,9 @@ spel.dat
 
 Then place it in the game directory.
 
-### Step 8: remove the CD check from `menu.exe`
+### Step 8: change `menu.exe`
 
-Back up `menu.exe` and apply its row from [Patch part 7](#patch-part-7-cd-check-removal).
+Back up `menu.exe` and apply its three changes: the CD check from [Patch part 7](#patch-part-7-cd-check-removal), and at file offsets `0x05E94B` and `0x05EACB` the uptime changes from [Patch part 14](#patch-part-14-a-long-windows-uptime), `79` to `EB` and `71` to `EB`.
 
 ### Step 9: check the overlay `.ini` files
 
@@ -1140,8 +1221,9 @@ After patching, this should become:
 ```asm
 004c0e57: da 35 38 1f 75 00     fidiv  DWORD PTR ds:0x751f38
 ...
-004c0e8a: c7 46 14 ab aa aa bf  mov    DWORD PTR [esi+0x14],0xbfaaaaab   ; 16:9
-004c0e96: c7 46 1c ab aa 2a 40  mov    DWORD PTR [esi+0x1c],0x402aaaab   ; 16:9
+004c0e8a: e8 ..                 call   set_horizontal_view
+004c0e8f: 90 90                 nop
+004c0e96: 90 90 90 90 90 90 90  nop
 ```
 
 ### Step 3: patch with Python
@@ -1180,13 +1262,13 @@ B4 B4 73 00 50 8B 08 FF 51 5C 6A 05 6A 19 A1 B4 B4 73 00 50 8B 08 FF 51
 8B 08 FF 51 58 6A 00 6A 0F A1 B4 B4 73 00 50 8B 08 FF 51 5C FF 74 24 14
 FF 74 24 14 FF 74 24 14 FF 74 24 14 8B 04 24 8B 08 FF 51 30 5A 50 52 6A
 0F A1 B4 B4 73 00 50 8B 08 FF 51 5C 58 C2 10 00 8B 44 24 04 8B 08 FF 61
-30 60 68 DF 5E 57 00 FF 15 A0 60 57 00 89 C6 85 F6 74 12 68 FF 5E 57 00
-56 FF 15 FC 60 57 00 85 C0 74 02 FF D0 8B 1D A8 5F 57 00 8B 2D AC 5F 57
+30 60 68 FB 5E 57 00 FF 15 A0 60 57 00 89 C6 85 F6 74 12 68 1B 5F 57 00
+56 FF 15 FC 60 57 00 85 C0 74 02 FF D0 8B 1D C4 5F 57 00 8B 2D C8 5F 57
 00 85 DB 75 61 81 EC 9C 00 00 00 89 E7 B9 27 00 00 00 31 C0 F3 AB 66 C7
-44 24 24 9C 00 85 F6 74 2B 68 EA 5E 57 00 56 FF 15 FC 60 57 00 85 C0 74
+44 24 24 9C 00 85 F6 74 2B 68 06 5F 57 00 56 FF 15 FC 60 57 00 85 C0 74
 1B 54 6A FF 6A 00 FF D0 85 C0 74 10 8B 5C 24 6C 8B 6C 24 70 85 DB 74 04
 85 ED 75 14 6A 00 FF 15 F4 61 57 00 89 C3 6A 01 FF 15 F4 61 57 00 89 C5
-81 C4 9C 00 00 00 BE 78 5F 57 00 B9 0C 00 00 00 AD 89 18 89 68 04 E2 F8
+81 C4 9C 00 00 00 BE 94 5F 57 00 B9 0C 00 00 00 AD 89 18 89 68 04 E2 F8
 8D 04 AD 01 00 00 00 31 D2 B9 03 00 00 00 F7 F1 A3 38 1F 75 00 61 E9 CD
 29 EE FF 50 A1 98 37 5B 00 8D 04 40 50 DB 04 24 A1 9C 37 5B 00 C1 E0 02
 89 04 24 DA 34 24 58 D9 C0 D9 E0 D9 5E 14 DC C0 D9 5E 1C 58 C3 FF 74 24
@@ -1195,11 +1277,11 @@ FF 74 24 14 FF 74 24 14 FF 74 24 14 8B 04 24 8B 08 FF 51 30 5A 50 52 6A
 C1 50 DB 04 24 58 8B 4C 24 10 D8 01 D9 19 58 C2 0C 00 A1 98 37 5B 00 8D
 04 40 8B 0D 9C 37 5B 00 8D 14 8D 00 00 00 00 29 D0 69 C0 40 1F 00 00 6B
 C9 63 89 CA D1 EA 85 C0 79 02 F7 DA 01 D0 99 F7 F9 C3 56 57 89 C6 83 EC
-40 89 E2 6A 40 52 68 34 A0 5A 00 56 E8 47 E5 F4 FF 83 C4 10 89 E0 BF 12
-5F 57 00 E8 6A 00 00 00 74 58 89 F0 BF 2B 5F 57 00 E8 5C 00 00 00 74 4A
-89 F0 BF 42 5F 57 00 E8 4E 00 00 00 74 3C 89 F0 BF 51 5F 57 00 E8 40 00
-00 00 74 2E 89 E0 BF 1E 5F 57 00 E8 32 00 00 00 74 27 89 F0 BF 60 5F 57
-00 E8 2F 00 00 00 74 19 89 F0 BF 6F 5F 57 00 E8 21 00 00 00 74 0B 31 C0
+40 89 E2 6A 40 52 68 34 A0 5A 00 56 E8 47 E5 F4 FF 83 C4 10 89 E0 BF 2E
+5F 57 00 E8 6A 00 00 00 74 58 89 F0 BF 47 5F 57 00 E8 5C 00 00 00 74 4A
+89 F0 BF 5E 5F 57 00 E8 4E 00 00 00 74 3C 89 F0 BF 6D 5F 57 00 E8 40 00
+00 00 74 2E 89 E0 BF 3A 5F 57 00 E8 32 00 00 00 74 27 89 F0 BF 7C 5F 57
+00 E8 2F 00 00 00 74 19 89 F0 BF 8B 5F 57 00 E8 21 00 00 00 74 0B 31 C0
 EB 0A B8 01 00 00 00 EB 03 83 C8 FF 83 C4 40 5F 5E C3 E8 06 00 00 00 75
 03 80 38 00 C3 57 8A 0F 84 C9 74 17 8A 28 80 FD 61 72 08 80 FD 7A 77 03
 80 ED 20 38 CD 75 04 40 47 EB E3 5F C3 56 8B 74 24 0C FF 15 AC 60 57 00
@@ -1214,7 +1296,7 @@ A3 18 1F 75 00 C7 05 1C 1F 75 00 01 00 00 00 2B 05 18 1F 75 00 C3 D9 C0
 DC 25 20 1F 75 00 D8 76 04 D9 5E 0C DD 15 20 1F 75 00 D8 76 04 D9 5E 08
 C3 D9 44 24 04 8B 44 24 04 89 41 78 DC 05 28 1F 75 00 DD 15 28 1F 75 00
 D9 51 74 83 EC 08 DD 1C 24 8B 49 14 B8 80 83 4F 00 FF D0 C2 04 00 50 51
-B9 B0 28 71 00 B8 00 68 4A 00 FF D0 D8 0D BB 5E 57 00 D9 E8 D8 D1 DF E0
+B9 B0 28 71 00 B8 00 68 4A 00 FF D0 D8 0D D7 5E 57 00 D9 E8 D8 D1 DF E0
 9E 73 02 D9 C9 DD D8 59 58 C3 D8 3D 18 63 57 00 E8 D1 FF FF FF DE C9 C3
 E8 C9 FF FF FF D9 C0 D8 4C 24 04 D9 5C 24 04 D9 C0 D8 4C 24 08 D9 5C 24
 08 D8 4C 24 0C D9 5C 24 0C 56 89 CE 8B 46 10 68 F6 97 4A 00 C3 89 44 24
@@ -1231,14 +1313,14 @@ C3 FF 15 AC 60 57 00 8B 15 A0 37 5B 00 83 FA 10 75 09 3C 06 72 05 BA 20
 40 09 C2 41 83 F9 04 72 E6 89 D7 89 E8 2D 7C EA 5C 00 31 D2 B9 94 02 00
 00 F7 F1 83 F8 13 72 05 B8 13 00 00 00 8D 34 85 40 1F 75 00 8B 0D 50 5E
 71 00 01 D9 D9 81 BC 00 00 00 DC C8 D9 81 C0 00 00 00 DC C8 DE C1 D9 81
-C4 00 00 00 DC C8 DE C1 D8 1D CF 5E 57 00 DF E0 9E 73 5F 83 FF 03 75 1D
-8B 41 24 69 C0 A9 00 00 00 03 05 D0 B0 73 00 D9 40 24 D8 1D D3 5E 57 00
-DF E0 9E 73 3D B9 B0 28 71 00 B8 00 68 4A 00 FF D0 D8 06 D9 16 D8 1D D7
+C4 00 00 00 DC C8 DE C1 D8 1D EB 5E 57 00 DF E0 9E 73 5F 83 FF 03 75 1D
+8B 41 24 69 C0 A9 00 00 00 03 05 D0 B0 73 00 D9 40 24 D8 1D EF 5E 57 00
+DF E0 9E 73 3D B9 B0 28 71 00 B8 00 68 4A 00 FF D0 D8 06 D9 16 D8 1D F3
 5E 57 00 DF E0 9E 72 28 6A 00 8B 0D 50 5E 71 00 FF 74 19 34 89 D8 31 D2
 B9 F0 00 00 00 F7 F1 50 B8 A0 E5 40 00 FF D0 83 C4 0C C7 06 00 00 00 00
 61 C2 04 00 C6 41 60 01 81 EC B0 00 00 00 E9 29 01 F9 FF 51 6A 01 B8 10
 29 4F 00 FF D0 59 81 EC D8 00 00 00 E9 7D D5 F7 FF D9 C0 D8 64 24 40 D9
-E1 D8 1D DB 5E 57 00 DF E0 9E 76 21 D9 EE D8 D9 DF E0 9E 74 12 8B 44 24
+E1 D8 1D F7 5E 57 00 DF E0 9E 76 21 D9 EE D8 D9 DF E0 9E 74 12 8B 44 24
 6C 6B C0 50 03 05 B8 5E 71 00 F6 00 04 75 06 DD D8 D9 44 24 40 D8 05 10
 63 57 00 C3 52 8B 44 3A 3C 85 C0 78 1E 3B 05 BC 5E 71 00 7F 16 89 F8 31
 D2 B9 F0 00 00 00 F7 F1 50 B8 20 70 4A 00 FF D0 83 C4 04 5A 8B 4C 3A 10
@@ -1250,36 +1332,37 @@ D2 89 90 94 00 00 00 89 90 98 00 00 00 89 90 9C 00 00 00 89 50 74 89 50
 35 04 5F 71 00 4E 69 EE 94 09 00 00 C3 E8 D4 FC FF FF 31 C9 D9 E8 D8 A4
 8D 88 00 00 00 D9 84 8D 88 00 00 00 D8 CA DC C1 DE F1 D9 1C 8D 98 1F 75
 00 41 83 F9 03 72 DD DD D8 C3 A1 A4 1F 75 00 05 B9 79 37 9E A3 A4 1F 75
-00 C1 E8 10 50 DB 04 24 58 D8 0D C3 5E 57 00 DE C1 E9 2E 28 FE FF B8 20
+00 C1 E8 10 50 DB 04 24 58 D8 0D DF 5E 57 00 DE C1 E9 2E 28 FE FF B8 20
 4D 44 00 EB 21 B8 80 4F 44 00 EB 1A B8 30 67 44 00 EB 13 B8 F0 D8 43 00
 EB 0C B8 70 B6 45 00 EB 05 B8 D0 B9 45 00 80 3D 90 1F 75 00 00 74 02 FF
 E0 C3 80 3D 90 1F 75 00 00 0F 85 D9 22 F0 FF C2 08 00 80 3D 90 1F 75 00
-00 0F 85 19 3F EF FF 31 C0 C2 04 00 E8 AF 0A F3 FF D8 15 BF 5E 57 00 DF
-E0 9E 73 08 DD D8 D9 05 BF 5E 57 00 C3 E8 96 0A F3 FF D8 0D 58 63 57 00
+00 0F 85 19 3F EF FF 31 C0 C2 04 00 E8 AF 0A F3 FF D8 15 DB 5E 57 00 DF
+E0 9E 73 08 DD D8 D9 05 DB 5E 57 00 C3 E8 96 0A F3 FF D8 0D 58 63 57 00
 EB 0B E8 89 0A F3 FF D8 0D 08 63 57 00 D9 E8 DE E1 C3 E8 F7 FB FF FF D8
 7C 24 04 D8 61 04 D8 54 24 04 DF E0 9E 76 04 D9 54 24 04 DD D8 E9 DE D0
 E8 FF E8 D7 FB FF FF D8 4B 30 51 D9 1C 24 59 8B 53 28 C3 D9 81 CC 00 00
 00 E8 C0 FB FF FF DE C9 DE C1 C3 FF 74 24 08 FF 74 24 08 E8 10 A5 EE FF
-83 C4 08 E8 A6 FB FF FF DE C9 C3 E8 9E FB FF FF D8 0D C7 5E 57 00 D9 E8
-DE E1 DE C9 C3 81 F9 C8 00 00 00 73 03 8D 42 64 A3 40 BA 6F 00 C3 B9 B0
-28 71 00 E8 F8 09 F3 FF D8 05 A8 1F 75 00 D9 15 A8 1F 75 00 D8 1D BF 5E
-57 00 DF E0 9E 0F 93 C0 0F B6 C0 72 07 83 25 A8 1F 75 00 00 C3 83 39 00
-74 46 51 83 EC 08 54 FF 15 58 60 57 00 8B 4C 24 08 DF 2C 24 DF 2D 00 1F
-75 00 DE E9 D8 71 04 D8 1D CB 5E 57 00 DF E0 9E 73 11 A1 00 1F 75 00 0B
-05 04 1F 75 00 74 04 F3 90 EB CB 58 A3 00 1F 75 00 58 A3 04 1F 75 00 59
-E8 83 08 F3 FF B9 B0 28 71 00 E8 79 09 F3 FF D8 05 94 1F 75 00 D8 15 BF
-5E 57 00 DF E0 9E 0F 93 05 90 1F 75 00 72 15 D8 25 BF 5E 57 00 D8 15 BF
-5E 57 00 DF E0 9E 72 04 DD D8 D9 EE D9 1D 94 1F 75 00 C3 00 00 C8 41 0A
-D7 23 3D 00 00 80 37 0A D7 23 3C 89 88 88 3B 00 00 10 40 00 00 00 3F 00
-00 40 40 00 00 C8 41 55 53 45 52 33 32 2E 44 4C 4C 00 45 6E 75 6D 44 69
-73 70 6C 61 79 53 65 74 74 69 6E 67 73 41 00 53 65 74 50 72 6F 63 65 73
-73 44 50 49 41 77 61 72 65 00 53 50 45 45 44 4F 4D 45 54 45 52 00 43 4F
-4D 4D 55 4E 49 43 41 54 4F 52 00 53 54 52 49 4E 47 5F 52 41 43 45 5F 54
-49 4D 45 5F 56 41 4C 55 45 00 53 54 52 49 4E 47 5F 43 55 52 5F 4C 41 50
-00 53 54 52 49 4E 47 5F 43 55 52 5F 50 4F 53 00 4F 56 4C 5F 50 4F 52 54
-52 41 49 54 53 5F 00 50 4C 41 59 45 52 5F 00 90 98 37 5B 00 EC 37 5B 00
-00 38 5B 00 14 38 5B 00 64 38 5B 00 78 38 5B 00 8C 38 5B 00 A0 38 5B 00
-B4 38 5B 00 04 39 5B 00 18 39 5B 00 2C 39 5B 00
+83 C4 08 E8 A6 FB FF FF DE C9 C3 E8 9E FB FF FF D8 0D E3 5E 57 00 D9 E8
+DE E1 DE C9 C3 81 F9 C8 00 00 00 73 03 8D 42 64 A3 40 BA 6F 00 C3 FF 15
+98 61 57 00 8B 0D AC 1F 75 00 85 C9 75 09 8D 48 FF 89 0D AC 1F 75 00 29
+C8 C3 B9 B0 28 71 00 E8 DC 09 F3 FF D8 05 A8 1F 75 00 D9 15 A8 1F 75 00
+D8 1D DB 5E 57 00 DF E0 9E 0F 93 C0 0F B6 C0 72 07 83 25 A8 1F 75 00 00
+C3 83 39 00 74 46 51 83 EC 08 54 FF 15 58 60 57 00 8B 4C 24 08 DF 2C 24
+DF 2D 00 1F 75 00 DE E9 D8 71 04 D8 1D E7 5E 57 00 DF E0 9E 73 11 A1 00
+1F 75 00 0B 05 04 1F 75 00 74 04 F3 90 EB CB 58 A3 00 1F 75 00 58 A3 04
+1F 75 00 59 E8 67 08 F3 FF B9 B0 28 71 00 E8 5D 09 F3 FF D8 05 94 1F 75
+00 D8 15 DB 5E 57 00 DF E0 9E 0F 93 05 90 1F 75 00 72 15 D8 25 DB 5E 57
+00 D8 15 DB 5E 57 00 DF E0 9E 72 04 DD D8 D9 EE D9 1D 94 1F 75 00 C3 00
+00 C8 41 0A D7 23 3D 00 00 80 37 0A D7 23 3C 89 88 88 3B 00 00 10 40 00
+00 00 3F 00 00 40 40 00 00 C8 41 55 53 45 52 33 32 2E 44 4C 4C 00 45 6E
+75 6D 44 69 73 70 6C 61 79 53 65 74 74 69 6E 67 73 41 00 53 65 74 50 72
+6F 63 65 73 73 44 50 49 41 77 61 72 65 00 53 50 45 45 44 4F 4D 45 54 45
+52 00 43 4F 4D 4D 55 4E 49 43 41 54 4F 52 00 53 54 52 49 4E 47 5F 52 41
+43 45 5F 54 49 4D 45 5F 56 41 4C 55 45 00 53 54 52 49 4E 47 5F 43 55 52
+5F 4C 41 50 00 53 54 52 49 4E 47 5F 43 55 52 5F 50 4F 53 00 4F 56 4C 5F
+50 4F 52 54 52 41 49 54 53 5F 00 50 4C 41 59 45 52 5F 00 90 98 37 5B 00
+EC 37 5B 00 00 38 5B 00 14 38 5B 00 64 38 5B 00 78 38 5B 00 8C 38 5B 00
+A0 38 5B 00 B4 38 5B 00 04 39 5B 00 18 39 5B 00 2C 39 5B 00
 """)
 if data[CODE_OFFSET:CODE_OFFSET + len(CODE)] not in (bytes(len(CODE)), CODE):
     raise RuntimeError("Unexpected bytes where the code goes. Wrong executable version?")
@@ -1320,7 +1403,7 @@ for offset, old, new in [
     (0x0A6850, "FF 15 58 60 57 00", "E8 70 F0 0C 00 90"),
     (0x0A673B, "FF 15 50 62 57 00", "E8 D1 F1 0C 00 90"),
     (0x0A687E, "FF 15 50 62 57 00", "E8 8E F0 0C 00 90"),
-    (0x04CB9E, "E8 5D 9B 05 00", "E8 8A 92 12 00"),
+    (0x04CB9E, "E8 5D 9B 05 00", "E8 A6 92 12 00"),
     (0x0A6751, "D8 76 04 D9 C0 D8 66", "E8 E0 F1 0C 00 EB 07"),
     (0x0A6894, "D8 76 04 D9 C0 D8 66", "E8 9D F0 0C 00 EB 07"),
     (0x0A45D0, "D9 44 24 04 D8", "E9 7C 13 0D 00"),
@@ -1368,7 +1451,7 @@ for offset, old, new in [
     (0x05366A, "E8 F1 65 01 00", "E8 CB 26 12 00"),
     (0x053693, "E8 C8 65 01 00", "E8 A2 26 12 00"),
     (0x069D3C, "E8 BF CA 03 00", "E8 0B C0 10 00"),
-    (0x03B1AE, "B8 01 00 00 00", "E8 4B AC 13 00"),
+    (0x03B1AE, "B8 01 00 00 00", "E8 67 AC 13 00"),
     (0x007EA4, "E8 D7 AF FF FF", "E8 D9 DE 16 00"),
     (0x007FFE, "E8 7D AE FF FF", "E8 7F DD 16 00"),
     (0x0080EB, "E8 90 AD FF FF", "E8 92 DC 16 00"),
@@ -1394,6 +1477,12 @@ for offset, old, new in [
     (0x062421, "E8 BA DE FF FF", "E8 9D 39 11 00"),
     (0x062436, "E8 A5 DE FF FF", "E8 88 39 11 00"),
     (0x06244B, "E8 90 DE FF FF", "E8 73 39 11 00"),
+    (0x026566, "8E", "86"),
+    (0x04E85D, "8C", "82"),
+    (0x04E9D0, "8C", "82"),
+    (0x08AC02, "FF 15 98 61 57 00", "E8 F7 B1 0E 00 90"),
+    (0x01F8DB, "E8 20 6F 08 00", "E8 6C 64 15 00"),
+    (0x020E15, "E8 E6 59 08 00", "E8 32 4F 15 00"),
     (0x000248, "08 44 1C 00", "00 50 1C 00"),
     (0x0001F8, "4A 44 17 00", "00 50 17 00"),
     (0x0CD478, "68 70", "EB B6"),
@@ -1440,7 +1529,7 @@ cp spel_patched.dat /path/to/A2Racer4/spel.dat
 ### Step 4: verify the patch
 
 ```bash
-objdump -D -Mintel --start-address=0x4c0e50 --stop-address=0x4c0ea0 spel_patched.dat
+objdump -D -Mintel --start-address=0x4c0e57 --stop-address=0x4c0e9d spel_patched.dat
 ```
 
 Check that the `fidiv` line points to `0x751f38`, that a `call` sits at `0x4c0e8a`, and that `0x4c0e96` holds `nop`s.
@@ -1453,9 +1542,36 @@ objdump -D -Mintel --start-address=0x4bc0f0 --stop-address=0x4bc0fb spel_patched
 
 It should store `0x4000000` at `[ecx+0x2a1]` and return.
 
+### Step 5: change `menu.exe`
+
+Back up `menu.exe` and change it as in Step 8 for Windows:
+
+```python
+from pathlib import Path
+
+menu = Path("menu.exe")
+data = bytearray(menu.read_bytes())
+for offset, old, new in [
+    (0x0A5154, "E8 7F FE FF FF 84 C0 74 08", "90 90 90 90 90 90 90 90 90"),
+    (0x05E94B, "79", "EB"),
+    (0x05EACB, "71", "EB"),
+]:
+    old, new = bytes.fromhex(old), bytes.fromhex(new)
+    if data[offset:offset + len(new)] == new:
+        continue
+    if data[offset:offset + len(old)] != old:
+        raise RuntimeError(f"Unexpected bytes at 0x{offset:X}. Wrong menu.exe version?")
+    data[offset:offset + len(old)] = new
+menu.write_bytes(data)
+```
+
+### Step 6: check the overlay `.ini` files
+
+As Step 9 for Windows.
+
 ## Values for other resolutions
 
-The added code calculates these at startup:
+The added code calculates these: the reference denominator at startup, the clip values when it sets up the viewport, and the HUD shift each time it reads a `Position`:
 
 | Resolution | Reference denominator | dvClipX | dvClipWidth | HUD shift |
 |---|---|---:|---:|---:|
@@ -1493,6 +1609,10 @@ That is the game's color key on a current driver. Check the changes in [Patch pa
 
 Check both changes in [Patch part 7](#patch-part-7-cd-check-removal). The menu and the race each have their own check.
 
+### The menu stops with an error at startup
+
+If Windows has been running for 25 to 50 days, check the two `menu.exe` changes in [Patch part 14](#patch-part-14-a-long-windows-uptime). Restarting Windows, with Fast Startup off, also helps.
+
 ### The game stops with "could not set display mode"
 
 The display's current resolution is not available at 32-bit color, or at 16-bit color on Windows XP and older. Run the patcher again and type a fixed resolution that is.
@@ -1515,16 +1635,16 @@ Check that the call at file offset `0x0582AA` goes to `startup`, and that the tw
 
 ### The 3D image is stretched
 
-Check the `fidiv` patch at `0x0C0E57`. It must divide by the 4:3 reference denominator at `0x00751F38`, not by the actual 16:9 width.
+Check the `fidiv` patch at `0x0C0E57`. It must divide by the 4:3 reference denominator at `0x00751F38`, not by the actual width.
 
 ### The 3D image is zoomed or cropped
 
-Check the horizontal clip constants against the formula in [Patch part 3](#patch-part-3-horizontal-clip-range).
+Check that file offset `0x0C0E8A` holds the call to `set_horizontal_view` followed by `90 90`, and `0x0C0E96` seven `90`. See [Patch part 3](#patch-part-3-horizontal-clip-range).
 
 ### The HUD is stretched or misplaced
 
-Elements too far out or too far in mean the `overlay*.ini` files are not the game's own, so they move twice. A squashed HUD means the three HUD changes in [Patch part 5](#patch-part-5-hud-proportions) are missing.
+Elements too far out or too far in mean the `overlay*.ini` files are not the game's own, so they move twice. Elements where they would be at 4:3 mean the three "HUD position read" rows are missing. A squashed HUD means the three HUD changes in [Patch part 5](#patch-part-5-hud-proportions) are missing.
 
 ### Finish-result text position does not move through `.ini`
 
-Testing showed me that the finish string entries read scale and color from the `.ini` files, but their position appears to be assigned by game code at runtime. This is a separate issue from the main 16:9 3D fix.
+The finish positions are placed by the game itself, in `FUN_00493A40`. Their `Position` in `overlay*.ini` is 0,0 and `Visible` is false, and the patch doesn't move them. Where the game puts them at other screen shapes wasn't checked.

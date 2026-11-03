@@ -46,6 +46,7 @@ GetModuleHandleA equ 0x5760a0           ; import table slots
 GetProcAddress   equ 0x5760fc
 GetSystemMetrics equ 0x5761f4
 GetVersion       equ 0x5760ac
+GetTickCount     equ 0x576198
 QueryPerformanceCounter equ 0x576058
 timeGetTime      equ 0x576250
 
@@ -114,6 +115,7 @@ TICK_REST    equ 0x751f94               ; float, time since the last tick
 CAMERA_K     equ 0x751f98               ; floats, how far the camera moves this frame, 3 in all
 COLOR_SEQUENCE equ 0x751fa4             ; steps through the values of color_round
 FLASH_TIME   equ 0x751fa8               ; float, how long the flash of a speed camera has lasted
+TICK_BASE    equ 0x751fac               ; GetTickCount when the communicator first asked, minus 1
 
 MODE_COUNT    equ 12
 
@@ -505,7 +507,7 @@ text_starts_with:
 
 ; Replaces the call to IDirectDraw::CreateSurface for the Z-buffer. Same contract
 ; as the COM call: four arguments, callee cleans up, returns the HRESULT. The game
-; asks for 16 bits, which is too coarse for its 10 to 12500 view range, so surfaces
+; asks for 16 bits, which is too coarse for its 1.33 to 12500 view range, so surfaces
 ; close together flicker. Ask for more from Windows Vista on: older cards could
 ; refuse a Z-buffer of another depth than the 16-bit screen only when drawing.
 create_zbuffer:
@@ -1173,6 +1175,21 @@ turbo_stamp:
     mov [TURBO_STAMP], eax
     ret
 
+; Replaces the call to GetTickCount that gives the communicator its time. It keeps its times as
+; signed numbers and starts some at 0, so once Windows has run for 24.9 days, when the count turns
+; negative as a signed number, the lamp of a Supercop no longer blinked or beeped. With Fast Startup
+; the count goes on through a shutdown. Count from the first call instead.
+game_ticks:
+    call [GetTickCount]
+    mov ecx, [TICK_BASE]
+    test ecx, ecx
+    jnz .have_base
+    lea ecx, [eax-1]
+    mov [TICK_BASE], ecx
+.have_base:
+    sub eax, ecx
+    ret
+
 ; Replaces saying that the flash of a speed camera is done, which it was after one frame: 33 ms at 30 frames
 ; per second, 4 at 240, which a screen may not even show. Returns 1 when it has lasted a tick.
 flash_done:
@@ -1264,7 +1281,8 @@ text_cur_pos:       db "STRING_CUR_POS", 0
 text_portraits:     db "OVL_PORTRAITS_", 0
 text_player:        db "PLAYER_", 0
 
-; The current display mode, then every 16-bit entry of the game's mode tables.
+; The current display mode, then the 11 entries of the game's mode table from 640x480 up,
+; at 8, 16 and 24 bits.
 align 4
 mode_entries:
     dd 0x5b3798, 0x5b37ec, 0x5b3800, 0x5b3814, 0x5b3864, 0x5b3878
