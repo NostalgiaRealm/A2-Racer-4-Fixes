@@ -20,6 +20,10 @@
 ; Frame rate:
 ; The AI, the camera and many effects also count per frame what they mean per second.
 ; From 25 frames per second up they now do what they did at 25.
+;
+; Direct3D device:
+; When Direct3D refused both the hardware and the software device, the game went on
+; without one and stopped with "Unhandled exception!". It now says why.
 
 bits 32
 org 0x575500
@@ -70,6 +74,10 @@ FORMAT_BITS       equ 12                ; depth, in the pixel format
 WHEEL_TIMER       equ 0x403170          ; ecx = controls, physics object on the stack
 RESET_CAR         equ 0x40e5a0          ; car, its place on the road, 0
 RACER_CONTROLS    equ 0x5cea7c          ; the controls of the first racer
+ERROR_TEXT        equ 0x4bb290          ; text for a DirectDraw or Direct3D error, takes the error
+FATAL_ERROR       equ 0x4c4150          ; shows a format in the game's "Fout" box and quits
+D3DEV_FILE        equ 0x5b21a8          ; "C:\Work\DX3D\D3dev.cpp"
+HAL_ERROR_FORMAT  equ 0x5b2238          ; "(%s):%d Could not create HAL device: %s,%d"
 RACER_CONTROLS_SIZE equ 0x294
 CAR_TABLE         equ 0x715e50
 OBJECT_TABLE      equ 0x73b0d0
@@ -116,6 +124,7 @@ CAMERA_K     equ 0x751f98               ; floats, how far the camera moves this 
 COLOR_SEQUENCE equ 0x751fa4             ; steps through the values of color_round
 FLASH_TIME   equ 0x751fa8               ; float, how long the flash of a speed camera has lasted
 TICK_BASE    equ 0x751fac               ; GetTickCount when the communicator first asked, minus 1
+HAL_ERROR    equ 0x751fb0               ; why Direct3D refused the hardware device
 
 MODE_COUNT    equ 12
 
@@ -1260,6 +1269,31 @@ frame_limit:
 .store_rest:
     fstp dword [TICK_REST]
     ret
+
+; Replaces reading the focus where the game logs why Direct3D refused the hardware device:
+; it passed the focus instead of the error, so the log never said why. Keep the error, and
+; push it twice as the game did, once as room on the stack and once for its text.
+hal_failed:
+    mov [HAL_ERROR], eax
+    pop ecx
+    push eax
+    push eax
+    jmp ecx
+
+; Jumps here when Direct3D refused both the hardware and the software device. The game went
+; on without a device and stopped with "Unhandled exception!" where it first used it. Stop
+; with the hardware device's error instead, in the game's own message.
+device_failed:
+    mov eax, [HAL_ERROR]
+    push eax
+    push eax
+    call ERROR_TEXT
+    pop ecx
+    push eax
+    push 253                            ; the line the game logs with it
+    push D3DEV_FILE
+    push HAL_ERROR_FORMAT
+    call FATAL_ERROR
 
 ai_frame_rate:      dd __float32__(25.0)
 tick_time:          dd __float32__(0.04)

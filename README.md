@@ -15,7 +15,8 @@ Fixes for the PC version of **A2 Racer 4**:
 - a car that really gets caught on something, with its wheels in the air, goes back on the road by itself;
 - police cars, the chase camera, car lighting, skid marks, smoke, mud and water, pickups and more no longer change with the frame rate from 25 frames per second up;
 - the menu no longer stops with an error when Windows has been running for 25 to 50 days, and the turbo and the smoke work then too;
-- under Wine the screen no longer stays black for 6 seconds before the menu, at startup and after every race.
+- under Wine the screen no longer stays black for 6 seconds before the menu, at startup and after every race;
+- when Direct3D refuses its 3D device at the start of a race, the game now says why, instead of stopping with "Unhandled exception!".
 
 They consist of a patched `spel.dat` executable module that holds these fixes, small patches to `menu.exe` for the CD check and the long uptime and to `A2Racer4.exe` for the wait before the menu, and an automatic patcher called `A2Racer4Fixes`, for 64-bit and 32-bit Windows and Linux, that applies them to the game folder you choose. You run the patcher once.
 
@@ -88,6 +89,14 @@ Windows counts the milliseconds since it started in a 32-bit number, and Windows
 - the lamp of the Supercop alarm stopped blinking.
 
 All of these now work however long Windows has been running. Only a menu or race open at the very moment the count starts again from 0, after 49.7 days, isn't covered.
+
+## "Unhandled exception!" at the start of a race (v1.5.5)
+
+On some PCs the race stops right at the start with "Unhandled exception!" in a box titled "Fout", with or without this patch. The game's code has one way to get there at that moment: Direct3D refuses the race's 3D device, and the game carries on without it until it crashes. Why a PC refuses the device is in its driver or in Windows, not in the game, so this patch can't change that. It does change the message: the box now says "Could not create HAL device", with the error Direct3D gave. That error is what to look up, or to report.
+
+To see every step, set `DEBUGON=1` under `[HELPDESK]` in `raser.ini`. The game then writes `debug.txt` in its folder.
+
+The details are in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#patch-part-16-a-refused-direct3d-device).
 
 ## Back to the menu under Wine (v1.5.4)
 
@@ -219,6 +228,7 @@ The original game is built around 4:3 display modes. Forcing another shape makes
 11. **Contacts in the physics engine:** see [Cars that lift up or float](#cars-that-lift-up-or-float-v151) and [Putting a car back on the road](#putting-a-car-back-on-the-road-v151).
 12. **Frame rate:** see [Frame rate](#frame-rate-v152).
 13. **Long uptime:** see [Long uptime](#long-uptime-v153).
+14. **A refused Direct3D device:** see ["Unhandled exception!" at the start of a race](#unhandled-exception-at-the-start-of-a-race-v155).
 
 ## How the HUD moves
 
@@ -265,6 +275,7 @@ To install by hand instead: back up `spel.dat`, `menu.exe` and `A2Racer4.exe`, a
 - The v1.5.0 check for cars that get hung up was checked in-game by the author, and tested under Wine with software rendering, at 165 and 51 frames per second, with a bot and with test placements on a jump ramp. The numbers are in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#patch-part-11-cars-that-get-hung-up).
 - The v1.5.1 physics engine fix was tested under Wine with software rendering, with a bot on all nine stages and with test placements, and with the stuck car of a test read from the running game. It went out before any check on real hardware. The author then tested the v1.5.2 test build, which includes it, in-game. The numbers are in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#patch-part-12-contacts-that-outlive-their-triangle).
 - The v1.5.2 frame rate fixes were checked in-game by the author before the release. Under Wine with software rendering they were measured again for v1.5.3, at exact limits of 15, 30, 60, 120, 165 and 240 frames per second, with a bot and with test placements, and ran on all nine stages for 150 seconds each at the limit of 240. The numbers are in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#patch-part-13-what-still-counted-frames).
+- v1.5.5 was tested by the author by starting a race on Windows 10 and on Wine 11.20 on Linux. Its message for a refused Direct3D device was tested under Wine, with the device refused on purpose in a test copy of `spel.dat`. Why the RX 7900 XTX that reported this refuses the device isn't known yet: resolving the "Unhandled exception!" there needs further testing on that PC.
 - The v1.5.4 launcher change was tested under Wine 11.20 with a test tool that starts a race, quits it and quits the menu, and with the same tool in a Windows 11 VM, where the race ran too. The author tested the build in-game before the release. The numbers are in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#patch-part-15-the-launchers-wait).
 - The v1.5.3 uptime fixes were tested under Wine, with the count moved forward to 30 days and across 24.9 and 49.7 days in a test build, for the menu and for a race. The author tested the build in-game before the release. The numbers are in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#patch-part-14-a-long-windows-uptime).
 - Back up your original files before installing.

@@ -58,6 +58,7 @@ file offset 0x1B3798 -> VA 0x005B3798
 | 13 | Police, the Supercop, the chase camera, car lighting, skid marks, smoke, mud and water, pickups, animated objects, debris, letters, the speed camera flash, the portrait outline and the turbo tank no longer depend on the frame rate from 25 FPS up |
 | 14 | The menu no longer stops at startup, and the turbo and the smoke keep working, when Windows has been running for 24.9 to 49.7 days |
 | 15 | `A2Racer4.exe` answers its messages while the menu or a race runs, so under Wine the menu no longer stays black for 6 seconds |
+| 16 | When Direct3D refuses its 3D device, the race says why, instead of stopping with "Unhandled exception!" |
 
 ## Patch part 1: display-mode table
 
@@ -298,7 +299,7 @@ The call to `IDirectDraw::CreateSurface` at VA `0x004C067D`, `0x004C067B` after 
 
 This only happens from Windows Vista on (`GetVersion` major version 6 or higher). Cards from the Windows 9x and XP period could accept a Z-buffer of another depth than a 16-bit screen when it is created and only fail when drawing, so those systems keep 16 bits and keep the flickering.
 
-Known limit: if a driver accepts the deeper Z-buffer but then refuses the Direct3D device, the game stops with its device error. There is no retry at 16 bits.
+Known limit: if a driver accepts the deeper Z-buffer but then refuses the Direct3D device, there is no retry at 16 bits. Until v1.5.4 the game then stopped with "Unhandled exception!". Since v1.5.5 it stops with the device's error, see [Patch part 16](#patch-part-16-a-refused-direct3d-device).
 
 ## Patch part 9: car physics
 
@@ -913,13 +914,58 @@ Windows 11 didn't wait with the original launcher either: its menu log had 31 to
 - Why Windows doesn't wait for the launcher's windows. In the VM it didn't, before or after the change.
 - Windows versions other than 11. The author tested the build in-game before the release, on a system that isn't recorded.
 
+## Patch part 16: a refused Direct3D device
+
+On some PCs the race stops right at the start with "Unhandled exception!" in a box titled "Fout", with or without this patch. It was reported on Windows 11 with a Radeon RX 7900 XTX, and it has been seen over the years on PCs from the Windows XP era to Windows 10.
+
+### Why
+
+`WinMain` (`FUN_00458270`) runs the whole race inside one C++ `try`. Its `catch (CPhysicsException)` shows that exception's own text. Its `catch (...)` at `0x004583E5` shows "Unhandled exception!" and quits. Built with Visual C++ 6, that `catch (...)` also catches access violations, so the box doesn't say what failed.
+
+`FUN_004BBD40` asks `IDirect3D2::CreateDevice` for the hardware device (`IID_IDirect3DHALDevice`) on the back buffer, and if that fails, for the software device (`IID_IDirect3DRGBDevice`). If both fail, it writes two lines to `debug.txt` and returns 0. Its callers, `FUN_004BB560` and `FUN_004C04B0`, ignore that. The software device can't stand in for a refused hardware device here, because the Z-buffer is already in video memory. The next use of the device is `EnumTextureFormats` in `FUN_004C1E10`, through the device pointer at `0x0073B4B4`, which is still 0. That is an access violation at `0x004C1E25`, which ends in the `catch (...)`.
+
+With `CreateDevice` made to fail in a test copy (`FUN_004BBC50` returning `E_FAIL`), the original `spel.dat` and v1.5.4 both end exactly like that under Wine:
+
+```text
+(C:\Work\DX3D\D3dev.cpp):253 Could not create HAL device: unidentified error,1
+(C:\Work\DX3D\D3dev.cpp):258 Could not create RGB device: undefined error condition
+setting palette
+enum texture formats
+TXFORMAT : STARTING ENUM TEXTURE FORMATS
+[0] Unhandled exception!
+```
+
+The first line shows a second bug: at `0x004BBDC5` the game passes the focus instead of the error, so the log never said why the hardware device was refused.
+
+All this happens before the texture memory probe of part 4, and no other change of this patch lies on that path, so the original and the patched game ended the same way.
+
+### The fix
+
+- At `0x004BBDC5`, `hal_failed` keeps the hardware device's error at `0x751FB0` and passes it to the log line.
+- At `0x004BBE56`, where both devices were refused, `device_failed` stops the race with the game's own fatal error box (`FUN_004C4150`), using the format of that log line: "(C:\Work\DX3D\D3dev.cpp):253 Could not create HAL device: *error*,*code*". The code is the `HRESULT` as a signed number. For example, -2147467259 is `0x80004005`, `E_FAIL`.
+
+This doesn't make a refused device work. It makes the message say why the device was refused.
+
+### Measurements
+
+Under Wine 11.20, with `CreateDevice` made to fail as above, v1.5.5 shows the box below and logs the same text. Without that change in the test copy, the race starts and runs as before. The author started a race with v1.5.5 on Windows 10 and on Wine 11.20 on Linux.
+
+```text
+(C:\Work\DX3D\D3dev.cpp):253 Could not create HAL device: undefined error condition,-2147467259
+```
+
+### What this doesn't establish
+
+- Why Direct3D refuses the hardware device on that RX 7900 XTX. The reason is in the driver or in Windows, not in the game. A Radeon 760M under Windows 10, a Windows 11 VM and Wine all create the device. Resolving it needs further testing on that PC; this change only makes the message say why.
+- Whether every "Unhandled exception!" at the start of a race has this cause. The parts of the race that depend on the PC (display modes, Direct3D, sound, input, system queries and loading the race) were read for others. This is the only path found that fits the report.
+
 ## All added and changed bytes
 
 This has every change from the parts above, apart from the bytes that parts 2 to 5 describe themselves, the changes to `menu.exe` in parts 7 and 14, and the changes to `A2Racer4.exe` in part 15.
 
 The added code is built from [`A2Racer4Fixes_source/spel_patch.asm`](A2Racer4Fixes_source/spel_patch.asm). It goes in unused space at the end of `.text`, file offset `0x175500`, VA `0x00575500`, and the section's virtual size is raised so that space is certainly mapped. That space must be all zero before patching. Both section sizes are raised: `.text` to `0x175000`, and `.data` from `0x1C4408` to `0x1C5000`, for the variables at `0x751F00` and up. A `spel.dat` patched by v1.2.0 to v1.5.2 has older code there, and one patched by v1.1.1 or older has other bytes where this patch checks, so in both cases the patcher starts from the copy in `4x3_backup`.
 
-2756 bytes at `0x175500`:
+2800 bytes at `0x175500`:
 
 ```text
 83 7C 24 04 03 75 60 A1 26 B8 73 00 83 F8 FF 74 56 69 C0 B0 00 00 00 03
@@ -936,13 +982,13 @@ B4 B4 73 00 50 8B 08 FF 51 5C 6A 05 6A 19 A1 B4 B4 73 00 50 8B 08 FF 51
 8B 08 FF 51 58 6A 00 6A 0F A1 B4 B4 73 00 50 8B 08 FF 51 5C FF 74 24 14
 FF 74 24 14 FF 74 24 14 FF 74 24 14 8B 04 24 8B 08 FF 51 30 5A 50 52 6A
 0F A1 B4 B4 73 00 50 8B 08 FF 51 5C 58 C2 10 00 8B 44 24 04 8B 08 FF 61
-30 60 68 FB 5E 57 00 FF 15 A0 60 57 00 89 C6 85 F6 74 12 68 1B 5F 57 00
-56 FF 15 FC 60 57 00 85 C0 74 02 FF D0 8B 1D C4 5F 57 00 8B 2D C8 5F 57
+30 60 68 27 5F 57 00 FF 15 A0 60 57 00 89 C6 85 F6 74 12 68 47 5F 57 00
+56 FF 15 FC 60 57 00 85 C0 74 02 FF D0 8B 1D F0 5F 57 00 8B 2D F4 5F 57
 00 85 DB 75 61 81 EC 9C 00 00 00 89 E7 B9 27 00 00 00 31 C0 F3 AB 66 C7
-44 24 24 9C 00 85 F6 74 2B 68 06 5F 57 00 56 FF 15 FC 60 57 00 85 C0 74
+44 24 24 9C 00 85 F6 74 2B 68 32 5F 57 00 56 FF 15 FC 60 57 00 85 C0 74
 1B 54 6A FF 6A 00 FF D0 85 C0 74 10 8B 5C 24 6C 8B 6C 24 70 85 DB 74 04
 85 ED 75 14 6A 00 FF 15 F4 61 57 00 89 C3 6A 01 FF 15 F4 61 57 00 89 C5
-81 C4 9C 00 00 00 BE 94 5F 57 00 B9 0C 00 00 00 AD 89 18 89 68 04 E2 F8
+81 C4 9C 00 00 00 BE C0 5F 57 00 B9 0C 00 00 00 AD 89 18 89 68 04 E2 F8
 8D 04 AD 01 00 00 00 31 D2 B9 03 00 00 00 F7 F1 A3 38 1F 75 00 61 E9 CD
 29 EE FF 50 A1 98 37 5B 00 8D 04 40 50 DB 04 24 A1 9C 37 5B 00 C1 E0 02
 89 04 24 DA 34 24 58 D9 C0 D9 E0 D9 5E 14 DC C0 D9 5E 1C 58 C3 FF 74 24
@@ -951,11 +997,11 @@ FF 74 24 14 FF 74 24 14 FF 74 24 14 8B 04 24 8B 08 FF 51 30 5A 50 52 6A
 C1 50 DB 04 24 58 8B 4C 24 10 D8 01 D9 19 58 C2 0C 00 A1 98 37 5B 00 8D
 04 40 8B 0D 9C 37 5B 00 8D 14 8D 00 00 00 00 29 D0 69 C0 40 1F 00 00 6B
 C9 63 89 CA D1 EA 85 C0 79 02 F7 DA 01 D0 99 F7 F9 C3 56 57 89 C6 83 EC
-40 89 E2 6A 40 52 68 34 A0 5A 00 56 E8 47 E5 F4 FF 83 C4 10 89 E0 BF 2E
-5F 57 00 E8 6A 00 00 00 74 58 89 F0 BF 47 5F 57 00 E8 5C 00 00 00 74 4A
-89 F0 BF 5E 5F 57 00 E8 4E 00 00 00 74 3C 89 F0 BF 6D 5F 57 00 E8 40 00
-00 00 74 2E 89 E0 BF 3A 5F 57 00 E8 32 00 00 00 74 27 89 F0 BF 7C 5F 57
-00 E8 2F 00 00 00 74 19 89 F0 BF 8B 5F 57 00 E8 21 00 00 00 74 0B 31 C0
+40 89 E2 6A 40 52 68 34 A0 5A 00 56 E8 47 E5 F4 FF 83 C4 10 89 E0 BF 5A
+5F 57 00 E8 6A 00 00 00 74 58 89 F0 BF 73 5F 57 00 E8 5C 00 00 00 74 4A
+89 F0 BF 8A 5F 57 00 E8 4E 00 00 00 74 3C 89 F0 BF 99 5F 57 00 E8 40 00
+00 00 74 2E 89 E0 BF 66 5F 57 00 E8 32 00 00 00 74 27 89 F0 BF A8 5F 57
+00 E8 2F 00 00 00 74 19 89 F0 BF B7 5F 57 00 E8 21 00 00 00 74 0B 31 C0
 EB 0A B8 01 00 00 00 EB 03 83 C8 FF 83 C4 40 5F 5E C3 E8 06 00 00 00 75
 03 80 38 00 C3 57 8A 0F 84 C9 74 17 8A 28 80 FD 61 72 08 80 FD 7A 77 03
 80 ED 20 38 CD 75 04 40 47 EB E3 5F C3 56 8B 74 24 0C FF 15 AC 60 57 00
@@ -970,7 +1016,7 @@ A3 18 1F 75 00 C7 05 1C 1F 75 00 01 00 00 00 2B 05 18 1F 75 00 C3 D9 C0
 DC 25 20 1F 75 00 D8 76 04 D9 5E 0C DD 15 20 1F 75 00 D8 76 04 D9 5E 08
 C3 D9 44 24 04 8B 44 24 04 89 41 78 DC 05 28 1F 75 00 DD 15 28 1F 75 00
 D9 51 74 83 EC 08 DD 1C 24 8B 49 14 B8 80 83 4F 00 FF D0 C2 04 00 50 51
-B9 B0 28 71 00 B8 00 68 4A 00 FF D0 D8 0D D7 5E 57 00 D9 E8 D8 D1 DF E0
+B9 B0 28 71 00 B8 00 68 4A 00 FF D0 D8 0D 03 5F 57 00 D9 E8 D8 D1 DF E0
 9E 73 02 D9 C9 DD D8 59 58 C3 D8 3D 18 63 57 00 E8 D1 FF FF FF DE C9 C3
 E8 C9 FF FF FF D9 C0 D8 4C 24 04 D9 5C 24 04 D9 C0 D8 4C 24 08 D9 5C 24
 08 D8 4C 24 0C D9 5C 24 0C 56 89 CE 8B 46 10 68 F6 97 4A 00 C3 89 44 24
@@ -987,14 +1033,14 @@ C3 FF 15 AC 60 57 00 8B 15 A0 37 5B 00 83 FA 10 75 09 3C 06 72 05 BA 20
 40 09 C2 41 83 F9 04 72 E6 89 D7 89 E8 2D 7C EA 5C 00 31 D2 B9 94 02 00
 00 F7 F1 83 F8 13 72 05 B8 13 00 00 00 8D 34 85 40 1F 75 00 8B 0D 50 5E
 71 00 01 D9 D9 81 BC 00 00 00 DC C8 D9 81 C0 00 00 00 DC C8 DE C1 D9 81
-C4 00 00 00 DC C8 DE C1 D8 1D EB 5E 57 00 DF E0 9E 73 5F 83 FF 03 75 1D
-8B 41 24 69 C0 A9 00 00 00 03 05 D0 B0 73 00 D9 40 24 D8 1D EF 5E 57 00
-DF E0 9E 73 3D B9 B0 28 71 00 B8 00 68 4A 00 FF D0 D8 06 D9 16 D8 1D F3
-5E 57 00 DF E0 9E 72 28 6A 00 8B 0D 50 5E 71 00 FF 74 19 34 89 D8 31 D2
+C4 00 00 00 DC C8 DE C1 D8 1D 17 5F 57 00 DF E0 9E 73 5F 83 FF 03 75 1D
+8B 41 24 69 C0 A9 00 00 00 03 05 D0 B0 73 00 D9 40 24 D8 1D 1B 5F 57 00
+DF E0 9E 73 3D B9 B0 28 71 00 B8 00 68 4A 00 FF D0 D8 06 D9 16 D8 1D 1F
+5F 57 00 DF E0 9E 72 28 6A 00 8B 0D 50 5E 71 00 FF 74 19 34 89 D8 31 D2
 B9 F0 00 00 00 F7 F1 50 B8 A0 E5 40 00 FF D0 83 C4 0C C7 06 00 00 00 00
 61 C2 04 00 C6 41 60 01 81 EC B0 00 00 00 E9 29 01 F9 FF 51 6A 01 B8 10
 29 4F 00 FF D0 59 81 EC D8 00 00 00 E9 7D D5 F7 FF D9 C0 D8 64 24 40 D9
-E1 D8 1D F7 5E 57 00 DF E0 9E 76 21 D9 EE D8 D9 DF E0 9E 74 12 8B 44 24
+E1 D8 1D 23 5F 57 00 DF E0 9E 76 21 D9 EE D8 D9 DF E0 9E 74 12 8B 44 24
 6C 6B C0 50 03 05 B8 5E 71 00 F6 00 04 75 06 DD D8 D9 44 24 40 D8 05 10
 63 57 00 C3 52 8B 44 3A 3C 85 C0 78 1E 3B 05 BC 5E 71 00 7F 16 89 F8 31
 D2 B9 F0 00 00 00 F7 F1 50 B8 20 70 4A 00 FF D0 83 C4 04 5A 8B 4C 3A 10
@@ -1006,40 +1052,42 @@ D2 89 90 94 00 00 00 89 90 98 00 00 00 89 90 9C 00 00 00 89 50 74 89 50
 35 04 5F 71 00 4E 69 EE 94 09 00 00 C3 E8 D4 FC FF FF 31 C9 D9 E8 D8 A4
 8D 88 00 00 00 D9 84 8D 88 00 00 00 D8 CA DC C1 DE F1 D9 1C 8D 98 1F 75
 00 41 83 F9 03 72 DD DD D8 C3 A1 A4 1F 75 00 05 B9 79 37 9E A3 A4 1F 75
-00 C1 E8 10 50 DB 04 24 58 D8 0D DF 5E 57 00 DE C1 E9 2E 28 FE FF B8 20
+00 C1 E8 10 50 DB 04 24 58 D8 0D 0B 5F 57 00 DE C1 E9 2E 28 FE FF B8 20
 4D 44 00 EB 21 B8 80 4F 44 00 EB 1A B8 30 67 44 00 EB 13 B8 F0 D8 43 00
 EB 0C B8 70 B6 45 00 EB 05 B8 D0 B9 45 00 80 3D 90 1F 75 00 00 74 02 FF
 E0 C3 80 3D 90 1F 75 00 00 0F 85 D9 22 F0 FF C2 08 00 80 3D 90 1F 75 00
-00 0F 85 19 3F EF FF 31 C0 C2 04 00 E8 AF 0A F3 FF D8 15 DB 5E 57 00 DF
-E0 9E 73 08 DD D8 D9 05 DB 5E 57 00 C3 E8 96 0A F3 FF D8 0D 58 63 57 00
+00 0F 85 19 3F EF FF 31 C0 C2 04 00 E8 AF 0A F3 FF D8 15 07 5F 57 00 DF
+E0 9E 73 08 DD D8 D9 05 07 5F 57 00 C3 E8 96 0A F3 FF D8 0D 58 63 57 00
 EB 0B E8 89 0A F3 FF D8 0D 08 63 57 00 D9 E8 DE E1 C3 E8 F7 FB FF FF D8
 7C 24 04 D8 61 04 D8 54 24 04 DF E0 9E 76 04 D9 54 24 04 DD D8 E9 DE D0
 E8 FF E8 D7 FB FF FF D8 4B 30 51 D9 1C 24 59 8B 53 28 C3 D9 81 CC 00 00
 00 E8 C0 FB FF FF DE C9 DE C1 C3 FF 74 24 08 FF 74 24 08 E8 10 A5 EE FF
-83 C4 08 E8 A6 FB FF FF DE C9 C3 E8 9E FB FF FF D8 0D E3 5E 57 00 D9 E8
+83 C4 08 E8 A6 FB FF FF DE C9 C3 E8 9E FB FF FF D8 0D 0F 5F 57 00 D9 E8
 DE E1 DE C9 C3 81 F9 C8 00 00 00 73 03 8D 42 64 A3 40 BA 6F 00 C3 FF 15
 98 61 57 00 8B 0D AC 1F 75 00 85 C9 75 09 8D 48 FF 89 0D AC 1F 75 00 29
 C8 C3 B9 B0 28 71 00 E8 DC 09 F3 FF D8 05 A8 1F 75 00 D9 15 A8 1F 75 00
-D8 1D DB 5E 57 00 DF E0 9E 0F 93 C0 0F B6 C0 72 07 83 25 A8 1F 75 00 00
+D8 1D 07 5F 57 00 DF E0 9E 0F 93 C0 0F B6 C0 72 07 83 25 A8 1F 75 00 00
 C3 83 39 00 74 46 51 83 EC 08 54 FF 15 58 60 57 00 8B 4C 24 08 DF 2C 24
-DF 2D 00 1F 75 00 DE E9 D8 71 04 D8 1D E7 5E 57 00 DF E0 9E 73 11 A1 00
+DF 2D 00 1F 75 00 DE E9 D8 71 04 D8 1D 13 5F 57 00 DF E0 9E 73 11 A1 00
 1F 75 00 0B 05 04 1F 75 00 74 04 F3 90 EB CB 58 A3 00 1F 75 00 58 A3 04
 1F 75 00 59 E8 67 08 F3 FF B9 B0 28 71 00 E8 5D 09 F3 FF D8 05 94 1F 75
-00 D8 15 DB 5E 57 00 DF E0 9E 0F 93 05 90 1F 75 00 72 15 D8 25 DB 5E 57
-00 D8 15 DB 5E 57 00 DF E0 9E 72 04 DD D8 D9 EE D9 1D 94 1F 75 00 C3 00
-00 C8 41 0A D7 23 3D 00 00 80 37 0A D7 23 3C 89 88 88 3B 00 00 10 40 00
-00 00 3F 00 00 40 40 00 00 C8 41 55 53 45 52 33 32 2E 44 4C 4C 00 45 6E
-75 6D 44 69 73 70 6C 61 79 53 65 74 74 69 6E 67 73 41 00 53 65 74 50 72
-6F 63 65 73 73 44 50 49 41 77 61 72 65 00 53 50 45 45 44 4F 4D 45 54 45
-52 00 43 4F 4D 4D 55 4E 49 43 41 54 4F 52 00 53 54 52 49 4E 47 5F 52 41
-43 45 5F 54 49 4D 45 5F 56 41 4C 55 45 00 53 54 52 49 4E 47 5F 43 55 52
-5F 4C 41 50 00 53 54 52 49 4E 47 5F 43 55 52 5F 50 4F 53 00 4F 56 4C 5F
-50 4F 52 54 52 41 49 54 53 5F 00 50 4C 41 59 45 52 5F 00 90 98 37 5B 00
-EC 37 5B 00 00 38 5B 00 14 38 5B 00 64 38 5B 00 78 38 5B 00 8C 38 5B 00
-A0 38 5B 00 B4 38 5B 00 04 39 5B 00 18 39 5B 00 2C 39 5B 00
+00 D8 15 07 5F 57 00 DF E0 9E 0F 93 05 90 1F 75 00 72 15 D8 25 07 5F 57
+00 D8 15 07 5F 57 00 DF E0 9E 72 04 DD D8 D9 EE D9 1D 94 1F 75 00 C3 A3
+B0 1F 75 00 59 50 50 FF E1 A1 B0 1F 75 00 50 50 E8 A3 53 F4 FF 59 50 68
+FD 00 00 00 68 A8 21 5B 00 68 38 22 5B 00 E8 4D E2 F4 FF 00 00 C8 41 0A
+D7 23 3D 00 00 80 37 0A D7 23 3C 89 88 88 3B 00 00 10 40 00 00 00 3F 00
+00 40 40 00 00 C8 41 55 53 45 52 33 32 2E 44 4C 4C 00 45 6E 75 6D 44 69
+73 70 6C 61 79 53 65 74 74 69 6E 67 73 41 00 53 65 74 50 72 6F 63 65 73
+73 44 50 49 41 77 61 72 65 00 53 50 45 45 44 4F 4D 45 54 45 52 00 43 4F
+4D 4D 55 4E 49 43 41 54 4F 52 00 53 54 52 49 4E 47 5F 52 41 43 45 5F 54
+49 4D 45 5F 56 41 4C 55 45 00 53 54 52 49 4E 47 5F 43 55 52 5F 4C 41 50
+00 53 54 52 49 4E 47 5F 43 55 52 5F 50 4F 53 00 4F 56 4C 5F 50 4F 52 54
+52 41 49 54 53 5F 00 50 4C 41 59 45 52 5F 00 90 98 37 5B 00 EC 37 5B 00
+00 38 5B 00 14 38 5B 00 64 38 5B 00 78 38 5B 00 8C 38 5B 00 A0 38 5B 00
+B4 38 5B 00 04 39 5B 00 18 39 5B 00 2C 39 5B 00
 ```
 
-After it, at `0x175FC4`, come two 32-bit values: a fixed width and height, or `0` and `0` to follow the display.
+After it, at `0x175FF0`, come two 32-bit values: a fixed width and height, or `0` and `0` to follow the display.
 
 | File offset | Original | Patched | What |
 |---|---|---|---|
@@ -1155,6 +1203,8 @@ After it, at `0x175FC4`, come two 32-bit values: a fixed width and height, or `0
 | `0x08AC02` | `FF 15 98 61 57 00` | `E8 F7 B1 0E 00 90` | communicator clock |
 | `0x01F8DB` | `E8 20 6F 08 00` | `E8 6C 64 15 00` | Supercop pedal |
 | `0x020E15` | `E8 E6 59 08 00` | `E8 32 4F 15 00` | Supercop pedal |
+| `0x0BBDC5` | `8B 44 24 64 50 50` | `E8 0D A1 0B 00 90` | Direct3D device error |
+| `0x0BBE56` | `33 C0 8B 4C 24 54` | `E9 86 A0 0B 00 90` | no Direct3D device |
 | `0x000248` | `08 44 1C 00` | `00 50 1C 00` | data section size |
 | `0x0001F8` | `4A 44 17 00` | `00 50 17 00` | code section size |
 | `0x0CD478` | `68 70` | `EB B6` | CD check |
@@ -1348,13 +1398,13 @@ B4 B4 73 00 50 8B 08 FF 51 5C 6A 05 6A 19 A1 B4 B4 73 00 50 8B 08 FF 51
 8B 08 FF 51 58 6A 00 6A 0F A1 B4 B4 73 00 50 8B 08 FF 51 5C FF 74 24 14
 FF 74 24 14 FF 74 24 14 FF 74 24 14 8B 04 24 8B 08 FF 51 30 5A 50 52 6A
 0F A1 B4 B4 73 00 50 8B 08 FF 51 5C 58 C2 10 00 8B 44 24 04 8B 08 FF 61
-30 60 68 FB 5E 57 00 FF 15 A0 60 57 00 89 C6 85 F6 74 12 68 1B 5F 57 00
-56 FF 15 FC 60 57 00 85 C0 74 02 FF D0 8B 1D C4 5F 57 00 8B 2D C8 5F 57
+30 60 68 27 5F 57 00 FF 15 A0 60 57 00 89 C6 85 F6 74 12 68 47 5F 57 00
+56 FF 15 FC 60 57 00 85 C0 74 02 FF D0 8B 1D F0 5F 57 00 8B 2D F4 5F 57
 00 85 DB 75 61 81 EC 9C 00 00 00 89 E7 B9 27 00 00 00 31 C0 F3 AB 66 C7
-44 24 24 9C 00 85 F6 74 2B 68 06 5F 57 00 56 FF 15 FC 60 57 00 85 C0 74
+44 24 24 9C 00 85 F6 74 2B 68 32 5F 57 00 56 FF 15 FC 60 57 00 85 C0 74
 1B 54 6A FF 6A 00 FF D0 85 C0 74 10 8B 5C 24 6C 8B 6C 24 70 85 DB 74 04
 85 ED 75 14 6A 00 FF 15 F4 61 57 00 89 C3 6A 01 FF 15 F4 61 57 00 89 C5
-81 C4 9C 00 00 00 BE 94 5F 57 00 B9 0C 00 00 00 AD 89 18 89 68 04 E2 F8
+81 C4 9C 00 00 00 BE C0 5F 57 00 B9 0C 00 00 00 AD 89 18 89 68 04 E2 F8
 8D 04 AD 01 00 00 00 31 D2 B9 03 00 00 00 F7 F1 A3 38 1F 75 00 61 E9 CD
 29 EE FF 50 A1 98 37 5B 00 8D 04 40 50 DB 04 24 A1 9C 37 5B 00 C1 E0 02
 89 04 24 DA 34 24 58 D9 C0 D9 E0 D9 5E 14 DC C0 D9 5E 1C 58 C3 FF 74 24
@@ -1363,11 +1413,11 @@ FF 74 24 14 FF 74 24 14 FF 74 24 14 8B 04 24 8B 08 FF 51 30 5A 50 52 6A
 C1 50 DB 04 24 58 8B 4C 24 10 D8 01 D9 19 58 C2 0C 00 A1 98 37 5B 00 8D
 04 40 8B 0D 9C 37 5B 00 8D 14 8D 00 00 00 00 29 D0 69 C0 40 1F 00 00 6B
 C9 63 89 CA D1 EA 85 C0 79 02 F7 DA 01 D0 99 F7 F9 C3 56 57 89 C6 83 EC
-40 89 E2 6A 40 52 68 34 A0 5A 00 56 E8 47 E5 F4 FF 83 C4 10 89 E0 BF 2E
-5F 57 00 E8 6A 00 00 00 74 58 89 F0 BF 47 5F 57 00 E8 5C 00 00 00 74 4A
-89 F0 BF 5E 5F 57 00 E8 4E 00 00 00 74 3C 89 F0 BF 6D 5F 57 00 E8 40 00
-00 00 74 2E 89 E0 BF 3A 5F 57 00 E8 32 00 00 00 74 27 89 F0 BF 7C 5F 57
-00 E8 2F 00 00 00 74 19 89 F0 BF 8B 5F 57 00 E8 21 00 00 00 74 0B 31 C0
+40 89 E2 6A 40 52 68 34 A0 5A 00 56 E8 47 E5 F4 FF 83 C4 10 89 E0 BF 5A
+5F 57 00 E8 6A 00 00 00 74 58 89 F0 BF 73 5F 57 00 E8 5C 00 00 00 74 4A
+89 F0 BF 8A 5F 57 00 E8 4E 00 00 00 74 3C 89 F0 BF 99 5F 57 00 E8 40 00
+00 00 74 2E 89 E0 BF 66 5F 57 00 E8 32 00 00 00 74 27 89 F0 BF A8 5F 57
+00 E8 2F 00 00 00 74 19 89 F0 BF B7 5F 57 00 E8 21 00 00 00 74 0B 31 C0
 EB 0A B8 01 00 00 00 EB 03 83 C8 FF 83 C4 40 5F 5E C3 E8 06 00 00 00 75
 03 80 38 00 C3 57 8A 0F 84 C9 74 17 8A 28 80 FD 61 72 08 80 FD 7A 77 03
 80 ED 20 38 CD 75 04 40 47 EB E3 5F C3 56 8B 74 24 0C FF 15 AC 60 57 00
@@ -1382,7 +1432,7 @@ A3 18 1F 75 00 C7 05 1C 1F 75 00 01 00 00 00 2B 05 18 1F 75 00 C3 D9 C0
 DC 25 20 1F 75 00 D8 76 04 D9 5E 0C DD 15 20 1F 75 00 D8 76 04 D9 5E 08
 C3 D9 44 24 04 8B 44 24 04 89 41 78 DC 05 28 1F 75 00 DD 15 28 1F 75 00
 D9 51 74 83 EC 08 DD 1C 24 8B 49 14 B8 80 83 4F 00 FF D0 C2 04 00 50 51
-B9 B0 28 71 00 B8 00 68 4A 00 FF D0 D8 0D D7 5E 57 00 D9 E8 D8 D1 DF E0
+B9 B0 28 71 00 B8 00 68 4A 00 FF D0 D8 0D 03 5F 57 00 D9 E8 D8 D1 DF E0
 9E 73 02 D9 C9 DD D8 59 58 C3 D8 3D 18 63 57 00 E8 D1 FF FF FF DE C9 C3
 E8 C9 FF FF FF D9 C0 D8 4C 24 04 D9 5C 24 04 D9 C0 D8 4C 24 08 D9 5C 24
 08 D8 4C 24 0C D9 5C 24 0C 56 89 CE 8B 46 10 68 F6 97 4A 00 C3 89 44 24
@@ -1399,14 +1449,14 @@ C3 FF 15 AC 60 57 00 8B 15 A0 37 5B 00 83 FA 10 75 09 3C 06 72 05 BA 20
 40 09 C2 41 83 F9 04 72 E6 89 D7 89 E8 2D 7C EA 5C 00 31 D2 B9 94 02 00
 00 F7 F1 83 F8 13 72 05 B8 13 00 00 00 8D 34 85 40 1F 75 00 8B 0D 50 5E
 71 00 01 D9 D9 81 BC 00 00 00 DC C8 D9 81 C0 00 00 00 DC C8 DE C1 D9 81
-C4 00 00 00 DC C8 DE C1 D8 1D EB 5E 57 00 DF E0 9E 73 5F 83 FF 03 75 1D
-8B 41 24 69 C0 A9 00 00 00 03 05 D0 B0 73 00 D9 40 24 D8 1D EF 5E 57 00
-DF E0 9E 73 3D B9 B0 28 71 00 B8 00 68 4A 00 FF D0 D8 06 D9 16 D8 1D F3
-5E 57 00 DF E0 9E 72 28 6A 00 8B 0D 50 5E 71 00 FF 74 19 34 89 D8 31 D2
+C4 00 00 00 DC C8 DE C1 D8 1D 17 5F 57 00 DF E0 9E 73 5F 83 FF 03 75 1D
+8B 41 24 69 C0 A9 00 00 00 03 05 D0 B0 73 00 D9 40 24 D8 1D 1B 5F 57 00
+DF E0 9E 73 3D B9 B0 28 71 00 B8 00 68 4A 00 FF D0 D8 06 D9 16 D8 1D 1F
+5F 57 00 DF E0 9E 72 28 6A 00 8B 0D 50 5E 71 00 FF 74 19 34 89 D8 31 D2
 B9 F0 00 00 00 F7 F1 50 B8 A0 E5 40 00 FF D0 83 C4 0C C7 06 00 00 00 00
 61 C2 04 00 C6 41 60 01 81 EC B0 00 00 00 E9 29 01 F9 FF 51 6A 01 B8 10
 29 4F 00 FF D0 59 81 EC D8 00 00 00 E9 7D D5 F7 FF D9 C0 D8 64 24 40 D9
-E1 D8 1D F7 5E 57 00 DF E0 9E 76 21 D9 EE D8 D9 DF E0 9E 74 12 8B 44 24
+E1 D8 1D 23 5F 57 00 DF E0 9E 76 21 D9 EE D8 D9 DF E0 9E 74 12 8B 44 24
 6C 6B C0 50 03 05 B8 5E 71 00 F6 00 04 75 06 DD D8 D9 44 24 40 D8 05 10
 63 57 00 C3 52 8B 44 3A 3C 85 C0 78 1E 3B 05 BC 5E 71 00 7F 16 89 F8 31
 D2 B9 F0 00 00 00 F7 F1 50 B8 20 70 4A 00 FF D0 83 C4 04 5A 8B 4C 3A 10
@@ -1418,37 +1468,39 @@ D2 89 90 94 00 00 00 89 90 98 00 00 00 89 90 9C 00 00 00 89 50 74 89 50
 35 04 5F 71 00 4E 69 EE 94 09 00 00 C3 E8 D4 FC FF FF 31 C9 D9 E8 D8 A4
 8D 88 00 00 00 D9 84 8D 88 00 00 00 D8 CA DC C1 DE F1 D9 1C 8D 98 1F 75
 00 41 83 F9 03 72 DD DD D8 C3 A1 A4 1F 75 00 05 B9 79 37 9E A3 A4 1F 75
-00 C1 E8 10 50 DB 04 24 58 D8 0D DF 5E 57 00 DE C1 E9 2E 28 FE FF B8 20
+00 C1 E8 10 50 DB 04 24 58 D8 0D 0B 5F 57 00 DE C1 E9 2E 28 FE FF B8 20
 4D 44 00 EB 21 B8 80 4F 44 00 EB 1A B8 30 67 44 00 EB 13 B8 F0 D8 43 00
 EB 0C B8 70 B6 45 00 EB 05 B8 D0 B9 45 00 80 3D 90 1F 75 00 00 74 02 FF
 E0 C3 80 3D 90 1F 75 00 00 0F 85 D9 22 F0 FF C2 08 00 80 3D 90 1F 75 00
-00 0F 85 19 3F EF FF 31 C0 C2 04 00 E8 AF 0A F3 FF D8 15 DB 5E 57 00 DF
-E0 9E 73 08 DD D8 D9 05 DB 5E 57 00 C3 E8 96 0A F3 FF D8 0D 58 63 57 00
+00 0F 85 19 3F EF FF 31 C0 C2 04 00 E8 AF 0A F3 FF D8 15 07 5F 57 00 DF
+E0 9E 73 08 DD D8 D9 05 07 5F 57 00 C3 E8 96 0A F3 FF D8 0D 58 63 57 00
 EB 0B E8 89 0A F3 FF D8 0D 08 63 57 00 D9 E8 DE E1 C3 E8 F7 FB FF FF D8
 7C 24 04 D8 61 04 D8 54 24 04 DF E0 9E 76 04 D9 54 24 04 DD D8 E9 DE D0
 E8 FF E8 D7 FB FF FF D8 4B 30 51 D9 1C 24 59 8B 53 28 C3 D9 81 CC 00 00
 00 E8 C0 FB FF FF DE C9 DE C1 C3 FF 74 24 08 FF 74 24 08 E8 10 A5 EE FF
-83 C4 08 E8 A6 FB FF FF DE C9 C3 E8 9E FB FF FF D8 0D E3 5E 57 00 D9 E8
+83 C4 08 E8 A6 FB FF FF DE C9 C3 E8 9E FB FF FF D8 0D 0F 5F 57 00 D9 E8
 DE E1 DE C9 C3 81 F9 C8 00 00 00 73 03 8D 42 64 A3 40 BA 6F 00 C3 FF 15
 98 61 57 00 8B 0D AC 1F 75 00 85 C9 75 09 8D 48 FF 89 0D AC 1F 75 00 29
 C8 C3 B9 B0 28 71 00 E8 DC 09 F3 FF D8 05 A8 1F 75 00 D9 15 A8 1F 75 00
-D8 1D DB 5E 57 00 DF E0 9E 0F 93 C0 0F B6 C0 72 07 83 25 A8 1F 75 00 00
+D8 1D 07 5F 57 00 DF E0 9E 0F 93 C0 0F B6 C0 72 07 83 25 A8 1F 75 00 00
 C3 83 39 00 74 46 51 83 EC 08 54 FF 15 58 60 57 00 8B 4C 24 08 DF 2C 24
-DF 2D 00 1F 75 00 DE E9 D8 71 04 D8 1D E7 5E 57 00 DF E0 9E 73 11 A1 00
+DF 2D 00 1F 75 00 DE E9 D8 71 04 D8 1D 13 5F 57 00 DF E0 9E 73 11 A1 00
 1F 75 00 0B 05 04 1F 75 00 74 04 F3 90 EB CB 58 A3 00 1F 75 00 58 A3 04
 1F 75 00 59 E8 67 08 F3 FF B9 B0 28 71 00 E8 5D 09 F3 FF D8 05 94 1F 75
-00 D8 15 DB 5E 57 00 DF E0 9E 0F 93 05 90 1F 75 00 72 15 D8 25 DB 5E 57
-00 D8 15 DB 5E 57 00 DF E0 9E 72 04 DD D8 D9 EE D9 1D 94 1F 75 00 C3 00
-00 C8 41 0A D7 23 3D 00 00 80 37 0A D7 23 3C 89 88 88 3B 00 00 10 40 00
-00 00 3F 00 00 40 40 00 00 C8 41 55 53 45 52 33 32 2E 44 4C 4C 00 45 6E
-75 6D 44 69 73 70 6C 61 79 53 65 74 74 69 6E 67 73 41 00 53 65 74 50 72
-6F 63 65 73 73 44 50 49 41 77 61 72 65 00 53 50 45 45 44 4F 4D 45 54 45
-52 00 43 4F 4D 4D 55 4E 49 43 41 54 4F 52 00 53 54 52 49 4E 47 5F 52 41
-43 45 5F 54 49 4D 45 5F 56 41 4C 55 45 00 53 54 52 49 4E 47 5F 43 55 52
-5F 4C 41 50 00 53 54 52 49 4E 47 5F 43 55 52 5F 50 4F 53 00 4F 56 4C 5F
-50 4F 52 54 52 41 49 54 53 5F 00 50 4C 41 59 45 52 5F 00 90 98 37 5B 00
-EC 37 5B 00 00 38 5B 00 14 38 5B 00 64 38 5B 00 78 38 5B 00 8C 38 5B 00
-A0 38 5B 00 B4 38 5B 00 04 39 5B 00 18 39 5B 00 2C 39 5B 00
+00 D8 15 07 5F 57 00 DF E0 9E 0F 93 05 90 1F 75 00 72 15 D8 25 07 5F 57
+00 D8 15 07 5F 57 00 DF E0 9E 72 04 DD D8 D9 EE D9 1D 94 1F 75 00 C3 A3
+B0 1F 75 00 59 50 50 FF E1 A1 B0 1F 75 00 50 50 E8 A3 53 F4 FF 59 50 68
+FD 00 00 00 68 A8 21 5B 00 68 38 22 5B 00 E8 4D E2 F4 FF 00 00 C8 41 0A
+D7 23 3D 00 00 80 37 0A D7 23 3C 89 88 88 3B 00 00 10 40 00 00 00 3F 00
+00 40 40 00 00 C8 41 55 53 45 52 33 32 2E 44 4C 4C 00 45 6E 75 6D 44 69
+73 70 6C 61 79 53 65 74 74 69 6E 67 73 41 00 53 65 74 50 72 6F 63 65 73
+73 44 50 49 41 77 61 72 65 00 53 50 45 45 44 4F 4D 45 54 45 52 00 43 4F
+4D 4D 55 4E 49 43 41 54 4F 52 00 53 54 52 49 4E 47 5F 52 41 43 45 5F 54
+49 4D 45 5F 56 41 4C 55 45 00 53 54 52 49 4E 47 5F 43 55 52 5F 4C 41 50
+00 53 54 52 49 4E 47 5F 43 55 52 5F 50 4F 53 00 4F 56 4C 5F 50 4F 52 54
+52 41 49 54 53 5F 00 50 4C 41 59 45 52 5F 00 90 98 37 5B 00 EC 37 5B 00
+00 38 5B 00 14 38 5B 00 64 38 5B 00 78 38 5B 00 8C 38 5B 00 A0 38 5B 00
+B4 38 5B 00 04 39 5B 00 18 39 5B 00 2C 39 5B 00
 """)
 if data[CODE_OFFSET:CODE_OFFSET + len(CODE)] not in (bytes(len(CODE)), CODE):
     raise RuntimeError("Unexpected bytes where the code goes. Wrong executable version?")
@@ -1569,6 +1621,8 @@ for offset, old, new in [
     (0x08AC02, "FF 15 98 61 57 00", "E8 F7 B1 0E 00 90"),
     (0x01F8DB, "E8 20 6F 08 00", "E8 6C 64 15 00"),
     (0x020E15, "E8 E6 59 08 00", "E8 32 4F 15 00"),
+    (0x0BBDC5, "8B 44 24 64 50 50", "E8 0D A1 0B 00 90"),
+    (0x0BBE56, "33 C0 8B 4C 24 54", "E9 86 A0 0B 00 90"),
     (0x000248, "08 44 1C 00", "00 50 1C 00"),
     (0x0001F8, "4A 44 17 00", "00 50 17 00"),
     (0x0CD478, "68 70", "EB B6"),
@@ -1721,6 +1775,10 @@ Check both changes in [Patch part 7](#patch-part-7-cd-check-removal). The menu a
 ### The menu stops with an error at startup
 
 If Windows has been running for 25 to 50 days, check the two `menu.exe` changes in [Patch part 14](#patch-part-14-a-long-windows-uptime). Restarting Windows, with Fast Startup off, also helps.
+
+### The race stops with "Unhandled exception!"
+
+Most likely Direct3D refused the race's 3D device, see [Patch part 16](#patch-part-16-a-refused-direct3d-device). Since v1.5.5 the box says "Could not create HAL device" with the reason instead. To log every step, set `DEBUGON=1` under `[HELPDESK]` in `raser.ini`. The game then writes `debug.txt` in its folder. If the game is in `C:\Program Files` or `C:\Program Files (x86)`, Windows may keep its own copies of `raser.ini` and `debug.txt` under `%LOCALAPPDATA%\VirtualStore`.
 
 ### Under Wine the menu stays black for a few seconds
 
