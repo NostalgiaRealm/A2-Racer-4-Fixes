@@ -43,7 +43,7 @@ file offset 0x1B3798 -> VA 0x005B3798
 
 | Part | Change |
 |---|---|
-| 1 | Display-mode table set to `W`×`H` at startup |
+| 1 | Display-mode table set to `W`×`H` at startup, except the 8-bit modes |
 | 2 | Viewport divides by a stored 4:3 reference width `(H × 4 + 1) / 3` instead of `W` |
 | 3 | Horizontal clip range becomes `±0.75 × W / H`, calculated in the viewport setup |
 | 4 | Texture memory crash fix, not related to the screen shape |
@@ -59,6 +59,8 @@ file offset 0x1B3798 -> VA 0x005B3798
 | 14 | The menu no longer stops at startup, and the turbo and the smoke keep working, when Windows has been running for 24.9 to 49.7 days |
 | 15 | `A2Racer4.exe` answers its messages while the menu or a race runs, so under Wine the menu no longer stays black for 6 seconds |
 | 16 | When Direct3D refuses its 3D device, the race says why, instead of stopping with "Unhandled exception!" |
+| 17 | When Direct3D refuses the display's size, as Windows 11 does above 2048 pixels, the race uses the largest mode of the same shape that it accepts |
+| 18 | With the 3D card off, an unchanged palette no longer stops the race on Windows 11 |
 
 ## Patch part 1: display-mode table
 
@@ -72,16 +74,20 @@ file offset 0x1B3798 -> VA 0x005B3798
 2. otherwise `EnumDisplaySettingsA(NULL, ENUM_CURRENT_SETTINGS)` for the primary display, looked up at runtime because `spel.dat` doesn't import it;
 3. if that fails, `GetSystemMetrics(SM_CXSCREEN / SM_CYSCREEN)`.
 
+Since v1.5.6 it then asks Direct3D whether it accepts that size, and takes a smaller one if it doesn't, see [Patch part 17](#patch-part-17-displays-above-2048-pixels).
+
 `menu.exe` changes the display mode while it runs, but puts it back before it exits, and the launcher only starts `spel.dat` after that.
 
-It then writes `W` and `H` as 32-bit values to the current mode and to the 11 entries of the game's mode table at `0x5B37B0` from 640×480 up, at 8, 16 and 24 bits. That covers every `RESOLUTION` in `raser.ini` except the 320×200 ones, 0, 5 and 6:
+It then writes `W` and `H` as 32-bit values to the current mode and to the 8 entries of the game's mode table at `0x5B37B0` from 640×480 up at 16 and 24 bits. That covers every `RESOLUTION` in `raser.ini` from 2 up except the 320×200 ones, 5 and 6:
 
 ```text
-0x005B3798  0x005B37EC  0x005B3800  0x005B3814  0x005B3864  0x005B3878
-0x005B388C  0x005B38A0  0x005B38B4  0x005B3904  0x005B3918  0x005B392C
+0x005B3798  0x005B3864  0x005B3878  0x005B388C  0x005B38A0  0x005B38B4
+0x005B3904  0x005B3918  0x005B392C
 ```
 
 Each holds the width, followed by the height. All of this is in memory, in `.data`.
+
+The three 8-bit entries from 640×480 up, `0x005B37EC`, `0x005B3800` and `0x005B3814`, were filled the same way up to v1.5.5. Since v1.5.6 they keep the game's own sizes, see [Patch part 18](#patch-part-18-the-8-bit-palette). Their addresses stay at the end of the list in the added code, so nothing in it moved.
 
 ## Patch part 2: 4:3 aspect denominator
 
@@ -299,7 +305,19 @@ The call to `IDirectDraw::CreateSurface` at VA `0x004C067D`, `0x004C067B` after 
 
 This only happens from Windows Vista on (`GetVersion` major version 6 or higher). Cards from the Windows 9x and XP period could accept a Z-buffer of another depth than a 16-bit screen when it is created and only fail when drawing, so those systems keep 16 bits and keep the flickering.
 
-Known limit: if a driver accepts the deeper Z-buffer but then refuses the Direct3D device, there is no retry at 16 bits. Until v1.5.4 the game then stopped with "Unhandled exception!". Since v1.5.5 it stops with the device's error, see [Patch part 16](#patch-part-16-a-refused-direct3d-device).
+The game asks for its Z-buffer without saying where it should go, so DirectDraw can put a deeper one in system memory. A Windows 11 VM with Microsoft's renderer on a virtio GPU does that: its hardware device reports only 16-bit Z-buffers, a deeper one is created anyway, and the hardware device is then refused with `D3DERR_ZBUFF_NEEDS_VIDEOMEMORY`. Up to v1.5.5 the game then took the software device and drew the race in software, slowly. The original game, with 16 bits, got the hardware device there.
+
+Since v1.5.6, `create_zbuffer_deeper` notes the depth it made, and `hal_refused`, where the game handles a refused hardware device, deals with exactly that error. When the Z-buffer is deeper than 16 bits, it logs the refusal, takes the Z-buffer off its surface (`DeleteAttachedSurface`) and releases it, and has the game's own `FUN_004C0610` make and attach a 16-bit one. Then it asks `FUN_004BBC50` for the hardware device again, and if that works it goes on at `0x004BBED4`, where the game goes on with a device. From then on that run asks for 16 bits only. If the hardware device is refused again, the game logs that and goes on as before, to the software device and, failing that, the box of part 16. The log shows:
+
+```text
+(C:\Work\DX3D\D3dev.cpp):253 Could not create HAL device: D3DERR_ZBUFF_NEEDS_VIDEOMEMORY,-2005531926
+hardware device again, with a 16-bit z-buffer
+Creating d3d_device with GUID:-2065285664
+```
+
+In that VM v1.5.6 then got the hardware device at 1920x1080 and the race ran with its 3D view, see [Patch part 17](#patch-part-17-displays-above-2048-pixels). Under Wine, with a test copy whose first hardware device request fails with that error while the Z-buffer is deeper, the retry got the device and the race ran. With every device request failing, the game logged both refusals and stopped with the box of part 16, without a crash.
+
+Known limit: a driver that refuses the hardware device over the deeper Z-buffer with another error still gets no retry, and the game then stops with the device's error or draws in software.
 
 ## Patch part 9: car physics
 
@@ -942,6 +960,7 @@ All this happens before the texture memory probe of part 4, and no other change 
 ### The fix
 
 - At `0x004BBDC5`, `hal_failed` keeps the hardware device's error at `0x751FB0` and passes it to the log line.
+- Since v1.5.6, a refusal because the deeper Z-buffer of part 8 isn't in video memory is tried once more with a 16-bit Z-buffer first, see [Patch part 8](#patch-part-8-deeper-z-buffer).
 - At `0x004BBE56`, where both devices were refused, `device_failed` stops the race with the game's own fatal error box (`FUN_004C4150`), using the format of that log line: "(C:\Work\DX3D\D3dev.cpp):253 Could not create HAL device: *error*,*code*". The code is the `HRESULT` as a signed number. For example, -2147467259 is `0x80004005`, `E_FAIL`.
 
 This doesn't make a refused device work. It makes the message say why the device was refused.
@@ -956,14 +975,90 @@ Under Wine 11.20, with `CreateDevice` made to fail as above, v1.5.5 shows the bo
 
 ### What this doesn't establish
 
-- Why Direct3D refuses the hardware device on that RX 7900 XTX. The reason is in the driver or in Windows, not in the game. A Radeon 760M under Windows 10, a Windows 11 VM and Wine all create the device. Resolving it needs further testing on that PC; this change only makes the message say why.
+- Why Direct3D refused the hardware device on that RX 7900 XTX: nothing was measured on that PC. On Windows 11 with an RX 6700 XT the cause turned out to be the size of the display, above 2048 pixels, see [Patch part 17](#patch-part-17-displays-above-2048-pixels). That the RX 7900 XTX has such a display too is likely, but not confirmed.
 - Whether every "Unhandled exception!" at the start of a race has this cause. The parts of the race that depend on the PC (display modes, Direct3D, sound, input, system queries and loading the race) were read for others. This is the only path found that fits the report.
+
+## Patch part 17: displays above 2048 pixels
+
+On Windows 11 the race stopped at its start on large displays: with "Unhandled exception!" up to v1.5.4, and from v1.5.5 with the box of part 16, saying "pointer is not a dd object". This was found and measured on Windows 11 Pro build 26300 with a Radeon RX 6700 XT and a 2560x1440 display.
+
+### Why
+
+Direct3D on that Windows refuses any render target wider or taller than 2048 pixels, with `DDERR_INVALIDOBJECT` (`0x88760082`). Standalone tests there:
+
+| Test | Result |
+|---|---|
+| Full screen at 640x480, 1600x1200, 1920x1080 and 1920x1200, 32 bits, hardware device on the back buffer | created |
+| Full screen at 2560x1440, 32 and 16 bits, on the back buffer and on the primary surface | refused |
+| Off-screen 3D target of 2048x2048, 2048x1152, 1024x2048, 2047x1025 or 1449x1449 | created |
+| Off-screen 3D target of 2049x1024, 1024x2049, 4096x256, 256x4096, 2560x1080, 2560x1440 or 3840x2160 | refused |
+| Through `IDirect3D7`: 1920x1080, 2560x1440 | created, refused |
+
+So the rule is a width and a height of at most 2048 each, whatever the number of pixels, the color depth, the Z-buffer depth or the interface. A Windows 11 VM without a graphics card, with Microsoft's own renderer on a virtio GPU, has the same limit: an off-screen 3D target of 2048x2048 is accepted, 2049x1024, 2560x1440 and 3840x2160 are refused with the same error. So the limit is in Windows 11, not in the graphics driver. The software device is refused the same way. The patch runs the race at the display's resolution, so on a 2560x1440 display both devices were refused, which is the path of part 16. The original game runs at 640x480 and never gets near the limit. Wine has no such limit.
+
+Not the cause, each tested on that PC: the deeper Z-buffer of part 8 (16 and 32 bits gave the same), the 32-bit mode of part 10 (16 bits gave the same), the compatibility settings on `A2Racer4.exe` that the race inherits, the driver version and the texture formats.
+
+### The fix
+
+`startup` calls `choose_resolution` with the resolution it found, from the display or fixed by the patcher. That first calls `probe`, which asks Direct3D whether it accepts a render target of that size, without a window and without changing the display mode: `DirectDrawCreate`, `SetCooperativeLevel(NULL, DDSCL_NORMAL)`, an off-screen surface with `DDSCAPS_OFFSCREENPLAIN | DDSCAPS_3DDEVICE | DDSCAPS_VIDEOMEMORY`, `QueryInterface` for `IDirect3D2` and `CreateDevice` for the hardware device on that surface. Then it releases all of it. One probe took about 50 ms on that PC.
+
+- Accepted: nothing changes. That is every display up to 2048x2048, and any size under Wine.
+- Refused: it goes through the modes that `EnumDisplaySettingsA` lists, no larger than the display, best first, and takes the first one Direct3D accepts. Best is the nearest shape, by the error `|w × H − W × h| / h`, which is 0 for the display's own shape, and of those the largest. Each round looks for the smallest key above the one tried last, so no size is probed twice. 2560x1440 and 3840x2160 give 1920x1080.
+- Nothing accepted, or no DirectDraw: the resolution stays as it was, and the race stops with the box of part 16.
+
+The mode table, the 3D view and the HUD then follow the chosen size as before. This also applies to a fixed resolution from the patcher, and it happens in memory at every start.
+
+That code is the second part of the added code, at the end of `.rdata`, because the first part has only 8 bytes left. The patcher raises the virtual size of `.rdata` to `0x17000`, up to `.data`, and marks the section executable: `spel.dat` has no NX flag, but with DEP set to cover all programs, code in a section that isn't executable would stop. See [All added and changed bytes](#all-added-and-changed-bytes).
+
+### Measurements
+
+- On that Windows 11 PC, with a build from before the Z-buffer retry of part 8: the probe refused 2560x1440, the race set 1920x1080 at 32 bits, the hardware device was created and the race ran, also with the compatibility settings the launcher there passes on. The author then started the game through the launcher there and found that the race looks right.
+- Under Wine 11.20 (Staging) with software rendering, on a 1024x768 and a 2560x1440 desktop: the probe accepted the size and the race ran at it. A test copy whose `probe` refuses anything above 2048, as that Windows does, chose 1920x1080 on the 2560x1440 desktop, and the race ran at that size with the HUD placed for 16:9.
+- In a Windows 11 VM with Microsoft's renderer on a virtio GPU at 2560x1440: v1.5.5 stopped with "Could not create HAL device: pointer is not a dd object", as reported. v1.5.6 chose 1920x1080 and set that mode. A fixed 2560x1440 from the patcher gave 1920x1080 as well. That VM refuses the hardware device for the deeper Z-buffer of part 8, so v1.5.6 tries again with 16 bits: the hardware device was created at 1920x1080 and the race ran there with the 3D view and the HUD in place.
+- In a Windows 98 SE VM, whose DirectX is a Wine-based wrapper with software rendering: the probe accepted 1600x900, the hardware device was created and the race's logic ran. That VM shows no 3D picture with any version, the original game included.
+
+### What this doesn't establish
+
+- Whether Windows 10, or other drivers, have the same limit. Where the size is accepted nothing changes, so the fix holds either way.
+- A fixed resolution above 2048 on real hardware. In the Windows 11 VM it went through the same code and gave 1920x1080.
+
+## Patch part 18: the 8-bit palette
+
+With "3D kaart" (3D card) off in the menu, the game runs the race in an 8-bit mode with a palette, on Direct3D's Ramp software renderer. On Windows 11 it stopped at once with "Pal.cpp(162) : could set entries (undefined error condition)", with this patch and with the original `spel.dat` alike.
+
+### Why
+
+On that Windows, the emulation of 8-bit modes makes `IDirectDrawPalette::SetEntries` return `E_FAIL` when the entries are the same as those of the previous call, on a palette that is set on a surface. `GetEntries` then shows that the palette holds exactly those colors. Any change, even of `peFlags` alone, succeeds. The game sends its palette twice while a race starts, in `FUN_00447D10` and in `FUN_004C04B0`, so the second call failed, and the game's wrapper around `SetEntries`, `FUN_004C9E70`, stops on any error.
+
+Not the cause: the palette flags, which surfaces the palette is set on, the resolution, an existing Direct3D device, the time between the calls.
+
+### The fix
+
+- At `0x004C9EF7` the wrapper's call to `SetEntries` goes to `palette_set_entries`. That makes the same call. When it returns `E_FAIL`, it reads the entries back with `GetEntries`, and if the red, green and blue of each one match, it returns 0. Any other error, or a real difference, goes back to the game as before. This 6-byte call is the third part of the added code.
+- The 8-bit entries of the mode table keep the game's own sizes, see part 1. At the display's size the race stopped with "gfx_sky.cpp(102) : blitting error": in this mode the sky and the loading pictures are 2D images made for 640x480. Software rendering gains nothing from more pixels either.
+- So the 4:3 reference width of parts 2 and 5 can no longer come from the display at startup. `display_depth` of part 10 now jumps to `depth_and_reference` in the second part, which also stores `(H × 4 + 1) / 3` from the current mode at `0x005B379C`, right before the game sets the display mode. For the 16-bit and 24-bit modes that is the same value as before.
+
+The first part of the added code changed in 50 bytes for this part and part 17, all in place: the call and `MODE_COUNT` in `startup`, `display_depth` and the order of `mode_entries`. For part 8, `create_zbuffer` and `hal_failed` became jumps to the second part, padded to their old size. No routine moved, so the rows that call into it are the same as in v1.5.5.
+
+### Measurements
+
+- On that Windows 11 PC with the 3D card off: `set display mode 640x480x8`, the Ramp device created, no error in 240 seconds, and the race reached.
+- The race there draws all 3D in black, while the sky and the HUD do show, with this patch and without it. That points to Microsoft's Ramp renderer on that Windows with this game's palette: with the entries marked read-only, as the game marks them, the 3D stays black, and with them marked free it came out gray and noisy. A 16-bit Z-buffer made no difference, and the transparency hooks of part 6 never switch on in this mode. This is left as it is. On Windows the 3D card off could instead be sent to the hardware path, by turning `RESOLUTION` 0 and 1 into 3 before the game's switch in `FUN_00447870` reads it; that wasn't built.
+- Under Wine the 3D card off doesn't run with any version: the Ramp device isn't created, and the original with only the CD check removed, v1.5.5 and v1.5.6 all stop with "Unhandled exception!" at `0x004C1E25`, as in part 16.
+- In the Windows 11 VM with the 3D card off, the original game stopped with "could set entries (undefined error condition)" too. the v1.5.6 build from before the Z-buffer retry set 640x480 at 8 bits, created the Ramp device and loaded the race without that error, three times out of three on a fresh start, also with the probe of part 17 switched off and on a 1920x1080 desktop. Once, right after a race that had been ended by force, DirectDraw offered that v1.5.6 run only 32-bit modes and it stopped with "could not set display mode"; that didn't happen again.
+- In the Windows 98 SE VM with the Wine-based DirectX wrapper the original game crashes while it creates the Ramp device. v1.5.6 gets past that and stops with "Unhandled exception!" at the first Z-buffer clear. That VM can't run this mode either way.
+
+### What this doesn't establish
+
+- Whether Windows 10 refuses unchanged entries too. Where `SetEntries` succeeds, nothing changes.
+- The size of the countdown digits in this mode, which follows the reference width. It should be as in the original, at 640x480.
+- When the Ramp device itself is refused, as under Wine, the race still stops with "Unhandled exception!": part 16 covers only the hardware and RGB devices.
 
 ## All added and changed bytes
 
 This has every change from the parts above, apart from the bytes that parts 2 to 5 describe themselves, the changes to `menu.exe` in parts 7 and 14, and the changes to `A2Racer4.exe` in part 15.
 
-The added code is built from [`A2Racer4Fixes_source/spel_patch.asm`](A2Racer4Fixes_source/spel_patch.asm). It goes in unused space at the end of `.text`, file offset `0x175500`, VA `0x00575500`, and the section's virtual size is raised so that space is certainly mapped. That space must be all zero before patching. Both section sizes are raised: `.text` to `0x175000`, and `.data` from `0x1C4408` to `0x1C5000`, for the variables at `0x751F00` and up. A `spel.dat` patched by v1.2.0 to v1.5.2 has older code there, and one patched by v1.1.1 or older has other bytes where this patch checks, so in both cases the patcher starts from the copy in `4x3_backup`.
+The added code is built from [`A2Racer4Fixes_source/spel_patch.asm`](A2Racer4Fixes_source/spel_patch.asm). It goes in unused space at the end of `.text`, file offset `0x175500`, VA `0x00575500`, and the section's virtual size is raised so that space is certainly mapped. That space must be all zero before patching. Both section sizes are raised: `.text` to `0x175000`, and `.data` from `0x1C4408` to `0x1C5000`, for the variables at `0x751F00` and up. A `spel.dat` patched by v1.2.0 to v1.5.5 has older code there, and one patched by v1.1.1 or older has other bytes where this patch checks, so in both cases the patcher starts from the copy in `4x3_backup`.
 
 2800 bytes at `0x175500`:
 
@@ -988,7 +1083,7 @@ FF 74 24 14 FF 74 24 14 FF 74 24 14 8B 04 24 8B 08 FF 51 30 5A 50 52 6A
 44 24 24 9C 00 85 F6 74 2B 68 32 5F 57 00 56 FF 15 FC 60 57 00 85 C0 74
 1B 54 6A FF 6A 00 FF D0 85 C0 74 10 8B 5C 24 6C 8B 6C 24 70 85 DB 74 04
 85 ED 75 14 6A 00 FF 15 F4 61 57 00 89 C3 6A 01 FF 15 F4 61 57 00 89 C5
-81 C4 9C 00 00 00 BE C0 5F 57 00 B9 0C 00 00 00 AD 89 18 89 68 04 E2 F8
+81 C4 9C 00 00 00 E8 85 6D 01 00 B9 09 00 00 00 AD 89 18 89 68 04 E2 F8
 8D 04 AD 01 00 00 00 31 D2 B9 03 00 00 00 F7 F1 A3 38 1F 75 00 61 E9 CD
 29 EE FF 50 A1 98 37 5B 00 8D 04 40 50 DB 04 24 A1 9C 37 5B 00 C1 E0 02
 89 04 24 DA 34 24 58 D9 C0 D9 E0 D9 5E 14 DC C0 D9 5E 1C 58 C3 FF 74 24
@@ -1004,11 +1099,11 @@ C9 63 89 CA D1 EA 85 C0 79 02 F7 DA 01 D0 99 F7 F9 C3 56 57 89 C6 83 EC
 00 E8 2F 00 00 00 74 19 89 F0 BF B7 5F 57 00 E8 21 00 00 00 74 0B 31 C0
 EB 0A B8 01 00 00 00 EB 03 83 C8 FF 83 C4 40 5F 5E C3 E8 06 00 00 00 75
 03 80 38 00 C3 57 8A 0F 84 C9 74 17 8A 28 80 FD 61 72 08 80 FD 7A 77 03
-80 ED 20 38 CD 75 04 40 47 EB E3 5F C3 56 8B 74 24 0C FF 15 AC 60 57 00
-3C 06 72 27 C7 46 18 18 00 00 00 E8 24 00 00 00 85 C0 74 1C C7 46 18 20
-00 00 00 E8 14 00 00 00 85 C0 74 0C C7 46 18 10 00 00 00 E8 04 00 00 00
-5E C2 10 00 FF 74 24 18 FF 74 24 18 FF 74 24 18 FF 74 24 18 8B 04 24 8B
-08 FF 51 18 C3 FF 74 24 04 FF 15 58 60 57 00 85 C0 74 3B 8B 4C 24 04 A1
+80 ED 20 38 CD 75 04 40 47 EB E3 5F C3 E9 08 6F 01 00 90 90 90 90 90 90
+90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90
+90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90
+90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90
+90 90 90 90 90 FF 74 24 04 FF 15 58 60 57 00 85 C0 74 3B 8B 4C 24 04 A1
 10 1F 75 00 0B 05 14 1F 75 00 75 0F 8B 01 A3 10 1F 75 00 8B 41 04 A3 14
 1F 75 00 8B 01 8B 51 04 2B 05 10 1F 75 00 1B 15 14 1F 75 00 89 01 89 51
 04 B8 01 00 00 00 C2 04 00 FF 15 50 62 57 00 83 3D 1C 1F 75 00 00 75 0F
@@ -1025,8 +1120,8 @@ E8 C9 FF FF FF D9 C0 D8 4C 24 04 D9 5C 24 04 D9 C0 D8 4C 24 08 D9 5C 24
 00 00 00 68 BE 5C 4A 00 C3 51 B8 80 96 4F 00 FF D0 59 31 C0 89 01 89 41
 04 89 41 08 C3 B9 30 1F 75 00 EB 05 B9 34 1F 75 00 D8 01 D9 C0 B8 24 85
 55 00 FF D0 50 DA 24 24 58 D9 19 C3 51 B9 3C 1F 75 00 E8 E2 FF FF FF 59
-C3 FF 15 AC 60 57 00 8B 15 A0 37 5B 00 83 FA 10 75 09 3C 06 72 05 BA 20
-00 00 00 C3 8B 44 24 5C 83 78 0C 20 74 19 FF 74 24 08 FF 74 24 08 E8 25
+C3 E9 7D 6C 01 00 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90
+90 90 90 90 8B 44 24 5C 83 78 0C 20 74 19 FF 74 24 08 FF 74 24 08 E8 25
 27 F5 FF 83 C4 08 66 89 07 83 C7 02 C2 08 00 FF 74 24 04 E8 40 24 F5 FF
 83 C4 04 89 07 83 C7 04 C2 08 00 FF 74 24 04 B8 70 31 40 00 FF D0 60 8B
 74 24 24 31 D2 31 C9 8B 44 8E 34 8B 40 08 83 78 28 00 74 07 89 C8 D1 E8
@@ -1072,8 +1167,8 @@ DF 2D 00 1F 75 00 DE E9 D8 71 04 D8 1D 13 5F 57 00 DF E0 9E 73 11 A1 00
 1F 75 00 0B 05 04 1F 75 00 74 04 F3 90 EB CB 58 A3 00 1F 75 00 58 A3 04
 1F 75 00 59 E8 67 08 F3 FF B9 B0 28 71 00 E8 5D 09 F3 FF D8 05 94 1F 75
 00 D8 15 07 5F 57 00 DF E0 9E 0F 93 05 90 1F 75 00 72 15 D8 25 07 5F 57
-00 D8 15 07 5F 57 00 DF E0 9E 72 04 DD D8 D9 EE D9 1D 94 1F 75 00 C3 A3
-B0 1F 75 00 59 50 50 FF E1 A1 B0 1F 75 00 50 50 E8 A3 53 F4 FF 59 50 68
+00 D8 15 07 5F 57 00 DF E0 9E 72 04 DD D8 D9 EE D9 1D 94 1F 75 00 C3 E9
+16 69 01 00 90 90 90 90 90 A1 B0 1F 75 00 50 50 E8 A3 53 F4 FF 59 50 68
 FD 00 00 00 68 A8 21 5B 00 68 38 22 5B 00 E8 4D E2 F4 FF 00 00 C8 41 0A
 D7 23 3D 00 00 80 37 0A D7 23 3C 89 88 88 3B 00 00 10 40 00 00 00 3F 00
 00 40 40 00 00 C8 41 55 53 45 52 33 32 2E 44 4C 4C 00 45 6E 75 6D 44 69
@@ -1082,12 +1177,70 @@ D7 23 3D 00 00 80 37 0A D7 23 3C 89 88 88 3B 00 00 10 40 00 00 00 3F 00
 4D 4D 55 4E 49 43 41 54 4F 52 00 53 54 52 49 4E 47 5F 52 41 43 45 5F 54
 49 4D 45 5F 56 41 4C 55 45 00 53 54 52 49 4E 47 5F 43 55 52 5F 4C 41 50
 00 53 54 52 49 4E 47 5F 43 55 52 5F 50 4F 53 00 4F 56 4C 5F 50 4F 52 54
-52 41 49 54 53 5F 00 50 4C 41 59 45 52 5F 00 90 98 37 5B 00 EC 37 5B 00
-00 38 5B 00 14 38 5B 00 64 38 5B 00 78 38 5B 00 8C 38 5B 00 A0 38 5B 00
-B4 38 5B 00 04 39 5B 00 18 39 5B 00 2C 39 5B 00
+52 41 49 54 53 5F 00 50 4C 41 59 45 52 5F 00 90 98 37 5B 00 64 38 5B 00
+78 38 5B 00 8C 38 5B 00 A0 38 5B 00 B4 38 5B 00 04 39 5B 00 18 39 5B 00
+2C 39 5B 00 EC 37 5B 00 00 38 5B 00 14 38 5B 00
 ```
 
 After it, at `0x175FF0`, come two 32-bit values: a fixed width and height, or `0` and `0` to follow the display.
+
+The display size check of part 17, the palette check of part 18 and the Z-buffer retry of part 8 no longer fit there. They go in unused space at the end of `.rdata`, file offset `0x18C470`, VA `0x0058C470`, which is all zero in the original. The rows for `0x000220` and `0x00023C` in the table raise the virtual size of `.rdata` from `0x16464` to `0x17000`, so that space is certainly mapped, and make the section executable. That code ends with 2 zero bytes of padding.
+
+1204 bytes at `0x18C470`:
+
+```text
+55 53 E8 75 01 00 00 85 C0 0F 85 67 01 00 00 68 27 5F 57 00 FF 15 A0 60
+57 00 85 C0 0F 84 54 01 00 00 68 32 5F 57 00 50 FF 15 FC 60 57 00 85 C0
+0F 84 40 01 00 00 81 EC BC 00 00 00 89 84 24 9C 00 00 00 89 E7 B9 27 00
+00 00 31 C0 F3 AB 66 C7 44 24 24 9C 00 89 84 24 A0 00 00 00 89 D8 0F AF
+C5 89 84 24 A4 00 00 00 83 8C 24 A8 00 00 00 FF 83 A4 24 B8 00 00 00 00
+8D 04 24 50 FF B4 24 BC 00 00 00 6A 00 FF 94 24 A8 00 00 00 85 C0 0F 84
+92 00 00 00 FF 84 24 B8 00 00 00 8B 54 24 6C 8B 4C 24 70 85 C9 74 D1 39
+DA 77 CD 39 E9 77 C9 89 D0 0F AF C5 89 DE 0F AF F1 29 F0 89 C6 C1 FE 1F
+31 F0 29 F0 52 31 D2 F7 F1 5A 89 D6 0F AF F1 3B 84 24 A0 00 00 00 77 0B
+72 9E 3B B4 24 A4 00 00 00 73 95 83 BC 24 A8 00 00 00 FF 74 18 3B 84 24
+A8 00 00 00 72 0F 77 80 3B B4 24 AC 00 00 00 0F 86 73 FF FF FF 89 84 24
+A8 00 00 00 89 B4 24 AC 00 00 00 89 94 24 B0 00 00 00 89 8C 24 B4 00 00
+00 E9 52 FF FF FF 8B 84 24 A8 00 00 00 83 F8 FF 74 3E 89 84 24 A0 00 00
+00 8B 84 24 AC 00 00 00 89 84 24 A4 00 00 00 FF B4 24 B4 00 00 00 FF B4
+24 B4 00 00 00 E8 22 00 00 00 85 C0 0F 84 06 FF FF FF 8B 9C 24 B0 00 00
+00 8B AC 24 B4 00 00 00 81 C4 BC 00 00 00 BE C0 5F 57 00 C3 53 56 57 81
+EC 80 00 00 00 89 E7 B9 20 00 00 00 31 C0 F3 AB 8D 44 24 6C 6A 00 50 6A
+00 FF 15 08 60 57 00 85 C0 0F 85 A4 00 00 00 8B 5C 24 6C 6A 08 6A 00 53
+8B 03 FF 50 50 C7 04 24 6C 00 00 00 C7 44 24 04 07 00 00 00 8B 84 24 94
+00 00 00 89 44 24 08 8B 84 24 90 00 00 00 89 44 24 0C C7 44 24 68 40 60
+00 00 6A 00 8D 44 24 74 50 8D 44 24 08 50 53 8B 03 FF 50 18 85 C0 75 4D
+8D 44 24 74 50 68 50 8D 57 00 53 8B 03 FF 10 85 C0 75 30 8B 74 24 74 8D
+44 24 78 50 FF 74 24 74 68 CB C6 58 00 56 8B 06 FF 50 20 85 C0 75 0E FF
+44 24 7C 8B 4C 24 78 51 8B 01 FF 50 08 56 8B 06 FF 50 08 8B 4C 24 70 51
+8B 01 FF 50 08 53 8B 03 FF 50 08 8B 44 24 7C 81 C4 80 00 00 00 5F 5E 5B
+C2 08 00 E0 3D E6 84 AA 46 CF 11 81 6F 00 00 C0 20 15 6E A1 9C 37 5B 00
+8D 04 85 01 00 00 00 31 D2 B9 03 00 00 00 F7 F1 A3 38 1F 75 00 FF 15 AC
+60 57 00 8B 15 A0 37 5B 00 83 FA 10 75 09 3C 06 72 05 BA 20 00 00 00 C3
+53 56 57 55 89 E5 81 EC 00 04 00 00 8B 5D 14 FF 75 20 FF 75 1C FF 75 18
+6A 00 53 8B 03 FF 50 18 3D 05 40 00 80 75 3A 89 E7 57 FF 75 1C FF 75 18
+6A 00 53 8B 03 FF 50 10 85 C0 75 20 8B 75 20 8B 4D 1C E3 14 8B 06 33 07
+25 FF FF FF 00 75 0D 83 C6 04 83 C7 04 49 75 EC 31 C0 EB 05 B8 05 40 00
+80 89 EC 5D 5F 5E 5B C2 10 00 56 8B 74 24 0C C7 05 B4 1F 75 00 10 00 00
+00 80 3D B8 1F 75 00 00 75 31 FF 15 AC 60 57 00 3C 06 72 27 C7 46 18 18
+00 00 00 E8 31 00 00 00 85 C0 74 20 C7 46 18 20 00 00 00 E8 21 00 00 00
+85 C0 74 10 C7 46 18 10 00 00 00 E8 11 00 00 00 5E C2 10 00 8B 4E 18 89
+0D B4 1F 75 00 5E C2 10 00 FF 74 24 18 FF 74 24 18 FF 74 24 18 FF 74 24
+18 8B 04 24 8B 08 FF 51 18 C3 A3 B0 1F 75 00 3D EA 02 76 88 0F 85 ED 00
+00 00 83 3D B4 1F 75 00 10 0F 86 E0 00 00 00 8B 8E 70 02 00 00 8B 15 AC
+08 74 00 85 C9 74 16 8B 15 B0 08 74 00 49 74 0D 8B 15 90 08 74 00 49 0F
+85 BA 00 00 00 52 50 50 E8 53 EA F2 FF 83 C4 04 50 68 FD 00 00 00 68 A8
+21 5B 00 68 38 22 5B 00 E8 4B 77 F3 FF 83 C4 14 68 F4 C8 58 00 E8 3E 77
+F3 FF 83 C4 04 5A FF 35 74 B7 73 00 6A 00 52 8B 02 FF 50 20 8B 0D 74 B7
+73 00 51 8B 01 FF 50 08 83 25 74 B7 73 00 00 83 25 7C B7 73 00 00 C6 05
+B8 1F 75 00 01 FF 35 9C 37 5B 00 FF 35 98 37 5B 00 6A 10 FF B6 70 02 00
+00 E8 62 3D F3 FF 83 C4 10 83 EC 10 A1 40 8D 57 00 89 04 24 A1 44 8D 57
+00 89 44 24 04 A1 48 8D 57 00 89 44 24 08 A1 4C 8D 57 00 89 44 24 0C 89
+F1 E8 72 F3 F2 FF A3 B0 1F 75 00 85 C0 75 08 83 C4 04 E9 E5 F5 F2 FF 59
+50 50 FF E1 68 61 72 64 77 61 72 65 20 64 65 76 69 63 65 20 61 67 61 69
+6E 2C 20 77 69 74 68 20 61 20 31 36 2D 62 69 74 20 7A 2D 62 75 66 66 65
+72 0A 00 00
+```
 
 | File offset | Original | Patched | What |
 |---|---|---|---|
@@ -1205,8 +1358,11 @@ After it, at `0x175FF0`, come two 32-bit values: a fixed width and height, or `0
 | `0x020E15` | `E8 E6 59 08 00` | `E8 32 4F 15 00` | Supercop pedal |
 | `0x0BBDC5` | `8B 44 24 64 50 50` | `E8 0D A1 0B 00 90` | Direct3D device error |
 | `0x0BBE56` | `33 C0 8B 4C 24 54` | `E9 86 A0 0B 00 90` | no Direct3D device |
+| `0x0C9EF7` | `6A 00 50 FF 51 18` | `50 E8 13 28 0C 00` | palette entries |
 | `0x000248` | `08 44 1C 00` | `00 50 1C 00` | data section size |
 | `0x0001F8` | `4A 44 17 00` | `00 50 17 00` | code section size |
+| `0x000220` | `64 64 01 00` | `00 70 01 00` | .rdata section size |
+| `0x00023C` | `40 00 00 40` | `40 00 00 60` | .rdata executable |
 | `0x0CD478` | `68 70` | `EB B6` | CD check |
 
 ## Manual patching on Windows
@@ -1254,7 +1410,7 @@ This confirms that the `.dat` file is really a Windows executable.
 
 ### Step 3: add the code
 
-Write the code and the two zero values from [All added and changed bytes](#all-added-and-changed-bytes) at file offset `0x175500`, and apply every row of the table there. This covers everything except parts 2 to 5: the startup code, the HUD position reads, the transparency fix, the deeper Z-buffer, the physics and frame rate fixes, the 32-bit display mode, the uptime fixes, both section sizes and the CD check in `spel.dat`.
+Write the code and the two zero values from [All added and changed bytes](#all-added-and-changed-bytes) at file offset `0x175500`, the second block of code at `0x18C470`, and apply every row of the table there. This covers everything except parts 2 to 5: the startup code, the HUD position reads, the transparency fix, the deeper Z-buffer, the physics and frame rate fixes, the 32-bit display mode, the uptime fixes, both section sizes and the CD check in `spel.dat`.
 
 ### Step 4: redirect the aspect division and the HUD
 
@@ -1404,7 +1560,7 @@ FF 74 24 14 FF 74 24 14 FF 74 24 14 8B 04 24 8B 08 FF 51 30 5A 50 52 6A
 44 24 24 9C 00 85 F6 74 2B 68 32 5F 57 00 56 FF 15 FC 60 57 00 85 C0 74
 1B 54 6A FF 6A 00 FF D0 85 C0 74 10 8B 5C 24 6C 8B 6C 24 70 85 DB 74 04
 85 ED 75 14 6A 00 FF 15 F4 61 57 00 89 C3 6A 01 FF 15 F4 61 57 00 89 C5
-81 C4 9C 00 00 00 BE C0 5F 57 00 B9 0C 00 00 00 AD 89 18 89 68 04 E2 F8
+81 C4 9C 00 00 00 E8 85 6D 01 00 B9 09 00 00 00 AD 89 18 89 68 04 E2 F8
 8D 04 AD 01 00 00 00 31 D2 B9 03 00 00 00 F7 F1 A3 38 1F 75 00 61 E9 CD
 29 EE FF 50 A1 98 37 5B 00 8D 04 40 50 DB 04 24 A1 9C 37 5B 00 C1 E0 02
 89 04 24 DA 34 24 58 D9 C0 D9 E0 D9 5E 14 DC C0 D9 5E 1C 58 C3 FF 74 24
@@ -1420,11 +1576,11 @@ C9 63 89 CA D1 EA 85 C0 79 02 F7 DA 01 D0 99 F7 F9 C3 56 57 89 C6 83 EC
 00 E8 2F 00 00 00 74 19 89 F0 BF B7 5F 57 00 E8 21 00 00 00 74 0B 31 C0
 EB 0A B8 01 00 00 00 EB 03 83 C8 FF 83 C4 40 5F 5E C3 E8 06 00 00 00 75
 03 80 38 00 C3 57 8A 0F 84 C9 74 17 8A 28 80 FD 61 72 08 80 FD 7A 77 03
-80 ED 20 38 CD 75 04 40 47 EB E3 5F C3 56 8B 74 24 0C FF 15 AC 60 57 00
-3C 06 72 27 C7 46 18 18 00 00 00 E8 24 00 00 00 85 C0 74 1C C7 46 18 20
-00 00 00 E8 14 00 00 00 85 C0 74 0C C7 46 18 10 00 00 00 E8 04 00 00 00
-5E C2 10 00 FF 74 24 18 FF 74 24 18 FF 74 24 18 FF 74 24 18 8B 04 24 8B
-08 FF 51 18 C3 FF 74 24 04 FF 15 58 60 57 00 85 C0 74 3B 8B 4C 24 04 A1
+80 ED 20 38 CD 75 04 40 47 EB E3 5F C3 E9 08 6F 01 00 90 90 90 90 90 90
+90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90
+90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90
+90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90
+90 90 90 90 90 FF 74 24 04 FF 15 58 60 57 00 85 C0 74 3B 8B 4C 24 04 A1
 10 1F 75 00 0B 05 14 1F 75 00 75 0F 8B 01 A3 10 1F 75 00 8B 41 04 A3 14
 1F 75 00 8B 01 8B 51 04 2B 05 10 1F 75 00 1B 15 14 1F 75 00 89 01 89 51
 04 B8 01 00 00 00 C2 04 00 FF 15 50 62 57 00 83 3D 1C 1F 75 00 00 75 0F
@@ -1441,8 +1597,8 @@ E8 C9 FF FF FF D9 C0 D8 4C 24 04 D9 5C 24 04 D9 C0 D8 4C 24 08 D9 5C 24
 00 00 00 68 BE 5C 4A 00 C3 51 B8 80 96 4F 00 FF D0 59 31 C0 89 01 89 41
 04 89 41 08 C3 B9 30 1F 75 00 EB 05 B9 34 1F 75 00 D8 01 D9 C0 B8 24 85
 55 00 FF D0 50 DA 24 24 58 D9 19 C3 51 B9 3C 1F 75 00 E8 E2 FF FF FF 59
-C3 FF 15 AC 60 57 00 8B 15 A0 37 5B 00 83 FA 10 75 09 3C 06 72 05 BA 20
-00 00 00 C3 8B 44 24 5C 83 78 0C 20 74 19 FF 74 24 08 FF 74 24 08 E8 25
+C3 E9 7D 6C 01 00 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90
+90 90 90 90 8B 44 24 5C 83 78 0C 20 74 19 FF 74 24 08 FF 74 24 08 E8 25
 27 F5 FF 83 C4 08 66 89 07 83 C7 02 C2 08 00 FF 74 24 04 E8 40 24 F5 FF
 83 C4 04 89 07 83 C7 04 C2 08 00 FF 74 24 04 B8 70 31 40 00 FF D0 60 8B
 74 24 24 31 D2 31 C9 8B 44 8E 34 8B 40 08 83 78 28 00 74 07 89 C8 D1 E8
@@ -1488,8 +1644,8 @@ DF 2D 00 1F 75 00 DE E9 D8 71 04 D8 1D 13 5F 57 00 DF E0 9E 73 11 A1 00
 1F 75 00 0B 05 04 1F 75 00 74 04 F3 90 EB CB 58 A3 00 1F 75 00 58 A3 04
 1F 75 00 59 E8 67 08 F3 FF B9 B0 28 71 00 E8 5D 09 F3 FF D8 05 94 1F 75
 00 D8 15 07 5F 57 00 DF E0 9E 0F 93 05 90 1F 75 00 72 15 D8 25 07 5F 57
-00 D8 15 07 5F 57 00 DF E0 9E 72 04 DD D8 D9 EE D9 1D 94 1F 75 00 C3 A3
-B0 1F 75 00 59 50 50 FF E1 A1 B0 1F 75 00 50 50 E8 A3 53 F4 FF 59 50 68
+00 D8 15 07 5F 57 00 DF E0 9E 72 04 DD D8 D9 EE D9 1D 94 1F 75 00 C3 E9
+16 69 01 00 90 90 90 90 90 A1 B0 1F 75 00 50 50 E8 A3 53 F4 FF 59 50 68
 FD 00 00 00 68 A8 21 5B 00 68 38 22 5B 00 E8 4D E2 F4 FF 00 00 C8 41 0A
 D7 23 3D 00 00 80 37 0A D7 23 3C 89 88 88 3B 00 00 10 40 00 00 00 3F 00
 00 40 40 00 00 C8 41 55 53 45 52 33 32 2E 44 4C 4C 00 45 6E 75 6D 44 69
@@ -1498,15 +1654,73 @@ D7 23 3D 00 00 80 37 0A D7 23 3C 89 88 88 3B 00 00 10 40 00 00 00 3F 00
 4D 4D 55 4E 49 43 41 54 4F 52 00 53 54 52 49 4E 47 5F 52 41 43 45 5F 54
 49 4D 45 5F 56 41 4C 55 45 00 53 54 52 49 4E 47 5F 43 55 52 5F 4C 41 50
 00 53 54 52 49 4E 47 5F 43 55 52 5F 50 4F 53 00 4F 56 4C 5F 50 4F 52 54
-52 41 49 54 53 5F 00 50 4C 41 59 45 52 5F 00 90 98 37 5B 00 EC 37 5B 00
-00 38 5B 00 14 38 5B 00 64 38 5B 00 78 38 5B 00 8C 38 5B 00 A0 38 5B 00
-B4 38 5B 00 04 39 5B 00 18 39 5B 00 2C 39 5B 00
+52 41 49 54 53 5F 00 50 4C 41 59 45 52 5F 00 90 98 37 5B 00 64 38 5B 00
+78 38 5B 00 8C 38 5B 00 A0 38 5B 00 B4 38 5B 00 04 39 5B 00 18 39 5B 00
+2C 39 5B 00 EC 37 5B 00 00 38 5B 00 14 38 5B 00
 """)
 if data[CODE_OFFSET:CODE_OFFSET + len(CODE)] not in (bytes(len(CODE)), CODE):
     raise RuntimeError("Unexpected bytes where the code goes. Wrong executable version?")
 data[CODE_OFFSET:CODE_OFFSET + len(CODE)] = CODE
 # A fixed resolution, or 0 and 0 to follow the display.
 data[CODE_OFFSET + len(CODE):CODE_OFFSET + len(CODE) + 8] = struct.pack("<II", width, height)
+
+RDATA_OFFSET = 0x18C470
+RDATA = bytes.fromhex("""
+55 53 E8 75 01 00 00 85 C0 0F 85 67 01 00 00 68 27 5F 57 00 FF 15 A0 60
+57 00 85 C0 0F 84 54 01 00 00 68 32 5F 57 00 50 FF 15 FC 60 57 00 85 C0
+0F 84 40 01 00 00 81 EC BC 00 00 00 89 84 24 9C 00 00 00 89 E7 B9 27 00
+00 00 31 C0 F3 AB 66 C7 44 24 24 9C 00 89 84 24 A0 00 00 00 89 D8 0F AF
+C5 89 84 24 A4 00 00 00 83 8C 24 A8 00 00 00 FF 83 A4 24 B8 00 00 00 00
+8D 04 24 50 FF B4 24 BC 00 00 00 6A 00 FF 94 24 A8 00 00 00 85 C0 0F 84
+92 00 00 00 FF 84 24 B8 00 00 00 8B 54 24 6C 8B 4C 24 70 85 C9 74 D1 39
+DA 77 CD 39 E9 77 C9 89 D0 0F AF C5 89 DE 0F AF F1 29 F0 89 C6 C1 FE 1F
+31 F0 29 F0 52 31 D2 F7 F1 5A 89 D6 0F AF F1 3B 84 24 A0 00 00 00 77 0B
+72 9E 3B B4 24 A4 00 00 00 73 95 83 BC 24 A8 00 00 00 FF 74 18 3B 84 24
+A8 00 00 00 72 0F 77 80 3B B4 24 AC 00 00 00 0F 86 73 FF FF FF 89 84 24
+A8 00 00 00 89 B4 24 AC 00 00 00 89 94 24 B0 00 00 00 89 8C 24 B4 00 00
+00 E9 52 FF FF FF 8B 84 24 A8 00 00 00 83 F8 FF 74 3E 89 84 24 A0 00 00
+00 8B 84 24 AC 00 00 00 89 84 24 A4 00 00 00 FF B4 24 B4 00 00 00 FF B4
+24 B4 00 00 00 E8 22 00 00 00 85 C0 0F 84 06 FF FF FF 8B 9C 24 B0 00 00
+00 8B AC 24 B4 00 00 00 81 C4 BC 00 00 00 BE C0 5F 57 00 C3 53 56 57 81
+EC 80 00 00 00 89 E7 B9 20 00 00 00 31 C0 F3 AB 8D 44 24 6C 6A 00 50 6A
+00 FF 15 08 60 57 00 85 C0 0F 85 A4 00 00 00 8B 5C 24 6C 6A 08 6A 00 53
+8B 03 FF 50 50 C7 04 24 6C 00 00 00 C7 44 24 04 07 00 00 00 8B 84 24 94
+00 00 00 89 44 24 08 8B 84 24 90 00 00 00 89 44 24 0C C7 44 24 68 40 60
+00 00 6A 00 8D 44 24 74 50 8D 44 24 08 50 53 8B 03 FF 50 18 85 C0 75 4D
+8D 44 24 74 50 68 50 8D 57 00 53 8B 03 FF 10 85 C0 75 30 8B 74 24 74 8D
+44 24 78 50 FF 74 24 74 68 CB C6 58 00 56 8B 06 FF 50 20 85 C0 75 0E FF
+44 24 7C 8B 4C 24 78 51 8B 01 FF 50 08 56 8B 06 FF 50 08 8B 4C 24 70 51
+8B 01 FF 50 08 53 8B 03 FF 50 08 8B 44 24 7C 81 C4 80 00 00 00 5F 5E 5B
+C2 08 00 E0 3D E6 84 AA 46 CF 11 81 6F 00 00 C0 20 15 6E A1 9C 37 5B 00
+8D 04 85 01 00 00 00 31 D2 B9 03 00 00 00 F7 F1 A3 38 1F 75 00 FF 15 AC
+60 57 00 8B 15 A0 37 5B 00 83 FA 10 75 09 3C 06 72 05 BA 20 00 00 00 C3
+53 56 57 55 89 E5 81 EC 00 04 00 00 8B 5D 14 FF 75 20 FF 75 1C FF 75 18
+6A 00 53 8B 03 FF 50 18 3D 05 40 00 80 75 3A 89 E7 57 FF 75 1C FF 75 18
+6A 00 53 8B 03 FF 50 10 85 C0 75 20 8B 75 20 8B 4D 1C E3 14 8B 06 33 07
+25 FF FF FF 00 75 0D 83 C6 04 83 C7 04 49 75 EC 31 C0 EB 05 B8 05 40 00
+80 89 EC 5D 5F 5E 5B C2 10 00 56 8B 74 24 0C C7 05 B4 1F 75 00 10 00 00
+00 80 3D B8 1F 75 00 00 75 31 FF 15 AC 60 57 00 3C 06 72 27 C7 46 18 18
+00 00 00 E8 31 00 00 00 85 C0 74 20 C7 46 18 20 00 00 00 E8 21 00 00 00
+85 C0 74 10 C7 46 18 10 00 00 00 E8 11 00 00 00 5E C2 10 00 8B 4E 18 89
+0D B4 1F 75 00 5E C2 10 00 FF 74 24 18 FF 74 24 18 FF 74 24 18 FF 74 24
+18 8B 04 24 8B 08 FF 51 18 C3 A3 B0 1F 75 00 3D EA 02 76 88 0F 85 ED 00
+00 00 83 3D B4 1F 75 00 10 0F 86 E0 00 00 00 8B 8E 70 02 00 00 8B 15 AC
+08 74 00 85 C9 74 16 8B 15 B0 08 74 00 49 74 0D 8B 15 90 08 74 00 49 0F
+85 BA 00 00 00 52 50 50 E8 53 EA F2 FF 83 C4 04 50 68 FD 00 00 00 68 A8
+21 5B 00 68 38 22 5B 00 E8 4B 77 F3 FF 83 C4 14 68 F4 C8 58 00 E8 3E 77
+F3 FF 83 C4 04 5A FF 35 74 B7 73 00 6A 00 52 8B 02 FF 50 20 8B 0D 74 B7
+73 00 51 8B 01 FF 50 08 83 25 74 B7 73 00 00 83 25 7C B7 73 00 00 C6 05
+B8 1F 75 00 01 FF 35 9C 37 5B 00 FF 35 98 37 5B 00 6A 10 FF B6 70 02 00
+00 E8 62 3D F3 FF 83 C4 10 83 EC 10 A1 40 8D 57 00 89 04 24 A1 44 8D 57
+00 89 44 24 04 A1 48 8D 57 00 89 44 24 08 A1 4C 8D 57 00 89 44 24 0C 89
+F1 E8 72 F3 F2 FF A3 B0 1F 75 00 85 C0 75 08 83 C4 04 E9 E5 F5 F2 FF 59
+50 50 FF E1 68 61 72 64 77 61 72 65 20 64 65 76 69 63 65 20 61 67 61 69
+6E 2C 20 77 69 74 68 20 61 20 31 36 2D 62 69 74 20 7A 2D 62 75 66 66 65
+72 0A 00 00
+""")
+if data[RDATA_OFFSET:RDATA_OFFSET + len(RDATA)] not in (bytes(len(RDATA)), RDATA):
+    raise RuntimeError("Unexpected bytes where the .rdata code goes. Wrong executable version?")
+data[RDATA_OFFSET:RDATA_OFFSET + len(RDATA)] = RDATA
 
 for offset, old, new in [
     (0x0582AA, "E8 31 FE FF FF", "E8 A2 D3 11 00"),
@@ -1623,8 +1837,11 @@ for offset, old, new in [
     (0x020E15, "E8 E6 59 08 00", "E8 32 4F 15 00"),
     (0x0BBDC5, "8B 44 24 64 50 50", "E8 0D A1 0B 00 90"),
     (0x0BBE56, "33 C0 8B 4C 24 54", "E9 86 A0 0B 00 90"),
+    (0x0C9EF7, "6A 00 50 FF 51 18", "50 E8 13 28 0C 00"),
     (0x000248, "08 44 1C 00", "00 50 1C 00"),
     (0x0001F8, "4A 44 17 00", "00 50 17 00"),
+    (0x000220, "64 64 01 00", "00 70 01 00"),
+    (0x00023C, "40 00 00 40", "40 00 00 60"),
     (0x0CD478, "68 70", "EB B6"),
     # Use the 4:3 reference width for the viewport and the HUD.
     (0x0C0E57, "DA 35 98 37 5B 00", "DA 35 38 1F 75 00"),
@@ -1778,7 +1995,15 @@ If Windows has been running for 25 to 50 days, check the two `menu.exe` changes 
 
 ### The race stops with "Unhandled exception!"
 
-Most likely Direct3D refused the race's 3D device, see [Patch part 16](#patch-part-16-a-refused-direct3d-device). Since v1.5.5 the box says "Could not create HAL device" with the reason instead. To log every step, set `DEBUGON=1` under `[HELPDESK]` in `raser.ini`. The game then writes `debug.txt` in its folder. If the game is in `C:\Program Files` or `C:\Program Files (x86)`, Windows may keep its own copies of `raser.ini` and `debug.txt` under `%LOCALAPPDATA%\VirtualStore`.
+Most likely Direct3D refused the race's 3D device, see [Patch part 16](#patch-part-16-a-refused-direct3d-device). Since v1.5.5 the box says "Could not create HAL device" with the reason instead. On Windows 11 with a display above 2048 pixels, see [Patch part 17](#patch-part-17-displays-above-2048-pixels). To log every step, set `DEBUGON=1` under `[HELPDESK]` in `raser.ini`. The game then writes `debug.txt` in its folder. If the game is in `C:\Program Files` or `C:\Program Files (x86)`, Windows may keep its own copies of `raser.ini` and `debug.txt` under `%LOCALAPPDATA%\VirtualStore`.
+
+### The race stops with "pointer is not a dd object"
+
+Direct3D refused the display's size, and no smaller mode either. Check the second block of code at `0x18C470` and the rows for `0x000220` and `0x00023C` in [All added and changed bytes](#all-added-and-changed-bytes), see [Patch part 17](#patch-part-17-displays-above-2048-pixels). A fixed resolution from the patcher goes through the same check.
+
+### With the 3D card off, the race stops with "could set entries"
+
+Check the row for `0x0C9EF7`, see [Patch part 18](#patch-part-18-the-8-bit-palette). On Windows 11 the race then runs, but its 3D stays black with this setting, with or without the patch. Turn the 3D card on.
 
 ### Under Wine the menu stays black for a few seconds
 

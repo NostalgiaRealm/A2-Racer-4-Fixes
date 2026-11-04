@@ -16,7 +16,9 @@ Fixes for the PC version of **A2 Racer 4**:
 - police cars, the chase camera, car lighting, skid marks, smoke, mud and water, pickups and more no longer change with the frame rate from 25 frames per second up;
 - the menu no longer stops with an error when Windows has been running for 25 to 50 days, and the turbo and the smoke work then too;
 - under Wine the screen no longer stays black for 6 seconds before the menu, at startup and after every race;
-- when Direct3D refuses its 3D device at the start of a race, the game now says why, instead of stopping with "Unhandled exception!".
+- when Direct3D refuses its 3D device at the start of a race, the game now says why, instead of stopping with "Unhandled exception!";
+- on Windows 11 the race also starts on displays wider or taller than 2048 pixels, such as 2560x1440, 4K and ultrawide, at the largest resolution of the same shape that Direct3D accepts;
+- with the 3D card off, the race no longer stops at once on Windows 11 with "could set entries".
 
 They consist of a patched `spel.dat` executable module that holds these fixes, small patches to `menu.exe` for the CD check and the long uptime and to `A2Racer4.exe` for the wait before the menu, and an automatic patcher called `A2Racer4Fixes`, for 64-bit and 32-bit Windows and Linux, that applies them to the game folder you choose. You run the patcher once.
 
@@ -96,7 +98,25 @@ On some PCs the race stops right at the start with "Unhandled exception!" in a b
 
 To see every step, set `DEBUGON=1` under `[HELPDESK]` in `raser.ini`. The game then writes `debug.txt` in its folder.
 
+On Windows 11 with a display above 2048 pixels the cause turned out to be the size of the display, fixed in v1.5.6: see [Displays above 2048 pixels](#displays-above-2048-pixels-v156).
+
 The details are in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#patch-part-16-a-refused-direct3d-device).
+
+## Displays above 2048 pixels (v1.5.6)
+
+On Windows 11, Direct3D refuses the race's 3D device on any screen wider or taller than 2048 pixels, with "pointer is not a dd object". So 2560x1440, 4K and ultrawide displays stopped at the start of a race: with "Unhandled exception!" up to v1.5.4, and with "Could not create HAL device" in v1.5.5. This was found on a Radeon RX 6700 XT, where the size of the display mattered, not the graphics card. A Windows 11 VM without a graphics card has the same limit, so it is in Windows itself. It very likely explains the report from an RX 7900 XTX too, though that wasn't checked on that PC.
+
+The game now asks Direct3D at startup whether it accepts the display's size. If not, it uses the largest mode of the same shape that it does accept: 1920x1080 on a 2560x1440 or 4K display. The display scales that up like any other resolution. Where the size is accepted, including under Wine, nothing changes.
+
+The details are in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#patch-part-17-displays-above-2048-pixels).
+
+## The 3D card off (v1.5.6)
+
+With "3D kaart" off, the race stopped at once on Windows 11 with "could set entries (undefined error condition)", with or without this patch: Windows refuses to set a palette that already holds the colors asked for, and the game asks twice. The game now checks what the palette holds before it stops. In this mode the race also keeps the game's own 640x480 instead of the display's resolution, because its sky and loading pictures are made for that size and software rendering gains nothing from more pixels.
+
+On Windows 11 the race then runs, but draws its 3D in black, with or without this patch. That comes from the old software renderer in Windows, not from the game, so leave the 3D card on there.
+
+The details are in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#patch-part-18-the-8-bit-palette).
 
 ## Back to the menu under Wine (v1.5.4)
 
@@ -144,11 +164,15 @@ This also means a resolution no longer needs a 16-bit mode to work.
 
 Where two surfaces lie close together, the game used to flicker. Its 16-bit Z-buffer is too coarse for how far it can see. From Windows Vista on the patch asks for 24 bits, or 32, and falls back to 16 if the driver has neither. This used to need dgVoodoo. Windows XP and older keep 16 bits, because the graphics cards of that time may not handle more with a 16-bit screen.
 
+Since v1.5.6, if the 3D device then refuses the deeper Z-buffer because it isn't in video memory, as in a Windows 11 VM without a graphics card, the game goes back to its own 16 bits instead of drawing the race in software.
+
 ## Automatic resolution (v1.3.0)
 
 The game now reads the resolution of your display every time it starts, and sets up the 3D view and the HUD for it. Change your display or its resolution and the next race just fits, without running the patcher again.
 
 Nothing is written for this: it all happens in memory while the game runs, so no files change and no administrator rights are needed. The `overlay*.ini` files stay as the game ships them.
+
+If Direct3D won't take your display's size, as on Windows 11 above 2048 pixels, the race uses the largest resolution of the same shape that it does take, see [Displays above 2048 pixels](#displays-above-2048-pixels-v156).
 
 If you want something other than your display's resolution, or the game can't use it, type a fixed resolution when the patcher asks. Run the patcher again and press Enter to go back to automatic.
 
@@ -215,7 +239,7 @@ The 32-bit Windows version needs a 486 or newer. The 32-bit Linux version needs 
 
 The original game is built around 4:3 display modes. Forcing another shape makes the image stretched or zoomed. The patch does the following, all calculated from your resolution when the game starts. The details and the code behind them are in [`README_technical_spel.dat.md`](README_technical_spel.dat.md).
 
-1. **Display mode:** the game's mode table is set to the resolution of your display.
+1. **Display mode:** the game's mode table is set to the resolution of your display, or to a smaller one of the same shape if Direct3D refuses that, see [Displays above 2048 pixels](#displays-above-2048-pixels-v156). The 8-bit modes, used with the 3D card off, keep 640x480.
 2. **3D view:** the vertical view stays as it is at 4:3, and the horizontal view is set to `0.75 x width / height`. Pixels stay square at every shape. A wider screen shows more on the sides, and a narrower one such as 5:4 shows slightly less.
 3. **HUD proportions:** the game squashes its HUD vertically on anything but 4:3. The patch makes it use the 4:3 shape there too, so the HUD keeps its original proportions and its size relative to the height of the screen.
 4. **Texture memory crash fix:** not related to the screen shape, see [Crash fix for modern graphics cards](#crash-fix-for-modern-graphics-cards-v104).
@@ -229,6 +253,8 @@ The original game is built around 4:3 display modes. Forcing another shape makes
 12. **Frame rate:** see [Frame rate](#frame-rate-v152).
 13. **Long uptime:** see [Long uptime](#long-uptime-v153).
 14. **A refused Direct3D device:** see ["Unhandled exception!" at the start of a race](#unhandled-exception-at-the-start-of-a-race-v155).
+15. **Displays above 2048 pixels:** see [Displays above 2048 pixels](#displays-above-2048-pixels-v156).
+16. **The 8-bit palette:** see [The 3D card off](#the-3d-card-off-v156).
 
 ## How the HUD moves
 
@@ -275,7 +301,8 @@ To install by hand instead: back up `spel.dat`, `menu.exe` and `A2Racer4.exe`, a
 - The v1.5.0 check for cars that get hung up was checked in-game by the author, and tested under Wine with software rendering, at 165 and 51 frames per second, with a bot and with test placements on a jump ramp. The numbers are in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#patch-part-11-cars-that-get-hung-up).
 - The v1.5.1 physics engine fix was tested under Wine with software rendering, with a bot on all nine stages and with test placements, and with the stuck car of a test read from the running game. It went out before any check on real hardware. The author then tested the v1.5.2 test build, which includes it, in-game. The numbers are in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#patch-part-12-contacts-that-outlive-their-triangle).
 - The v1.5.2 frame rate fixes were checked in-game by the author before the release. Under Wine with software rendering they were measured again for v1.5.3, at exact limits of 15, 30, 60, 120, 165 and 240 frames per second, with a bot and with test placements, and ran on all nine stages for 150 seconds each at the limit of 240. The numbers are in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#patch-part-13-what-still-counted-frames).
-- v1.5.5 was tested by the author by starting a race on Windows 10 and on Wine 11.20 on Linux. Its message for a refused Direct3D device was tested under Wine, with the device refused on purpose in a test copy of `spel.dat`. Why the RX 7900 XTX that reported this refuses the device isn't known yet: resolving the "Unhandled exception!" there needs further testing on that PC.
+- The v1.5.6 fixes were found and tested on Windows 11 Pro build 26300 with a Radeon RX 6700 XT and a 2560x1440 display, with a build from before the Z-buffer retry: the race ran at 1920x1080, and with the 3D card off at 640x480 with 8-bit color. The author started the game through the launcher there and found that the race looks right. In a Windows 11 VM at 2560x1440, v1.5.5 stopped with "pointer is not a dd object". The final v1.5.6, written there by the 64-bit patcher, chose 1920x1080, went back to a 16-bit Z-buffer as that VM needs, and ran the race with its 3D view and HUD in place. With the 3D card off, the earlier build got past the "could set entries" that stopped the original game there. Under Wine 11.20 the race ran at a 1024x768 and a 2560x1440 desktop. A test copy that refuses sizes above 2048, the way Windows 11 does, ran it at 1920x1080, and one whose 3D device refuses the deeper Z-buffer ran it with 16 bits. All four patchers write the same files; the 32-bit one also did on Windows 98 SE in a VM, before the Z-buffer retry. Not tested: Windows 10 on a display above 2048 pixels.
+- v1.5.5 was tested by the author by starting a race on Windows 10 and on Wine 11.20 on Linux. Its message for a refused Direct3D device was tested under Wine, with the device refused on purpose in a test copy of `spel.dat`. Why the RX 7900 XTX that reported this refused the device wasn't measured on that PC. v1.5.6 fixes the likely cause, a display above 2048 pixels.
 - The v1.5.4 launcher change was tested under Wine 11.20 with a test tool that starts a race, quits it and quits the menu, and with the same tool in a Windows 11 VM, where the race ran too. The author tested the build in-game before the release. The numbers are in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#patch-part-15-the-launchers-wait).
 - The v1.5.3 uptime fixes were tested under Wine, with the count moved forward to 30 days and across 24.9 and 49.7 days in a test build, for the menu and for a race. The author tested the build in-game before the release. The numbers are in [`README_technical_spel.dat.md`](README_technical_spel.dat.md#patch-part-14-a-long-windows-uptime).
 - Back up your original files before installing.

@@ -23,7 +23,32 @@
 ;
 ; Direct3D device:
 ; When Direct3D refused both the hardware and the software device, the game went on
-; without one and stopped with "Unhandled exception!". It now says why.
+; without one and stopped with "Unhandled exception!". It now says why. When the hardware
+; device is refused because the deeper Z-buffer isn't in video memory, it tries once more
+; with the game's own 16-bit Z-buffer.
+;
+; Large displays:
+; On Windows 11 (seen on a Radeon RX 6700 XT and reported on an RX 7900 XTX) Direct3D
+; refuses any render target wider or taller than 2048 pixels with DDERR_INVALIDOBJECT,
+; through IDirect3D2 and IDirect3D7 alike, at 16 and at 32 bits, with any Z-buffer. So
+; the race could not start at 2560x1440, 4K or on an ultrawide display, while 640x480 to
+; 2048x2048 ran. Wine has no such limit. The code in the second part below asks Direct3D
+; at startup whether it accepts a target of the display's size, and when it doesn't, picks
+; the largest mode of the same shape that it does accept.
+;
+; 8-bit palette:
+; With "3D kaart" off the game runs in an 8-bit mode with a palette. On Windows 11 the
+; emulation of 8-bit modes makes IDirectDrawPalette::SetEntries fail with E_FAIL whenever
+; the entries sent are the same as those of the previous call, on a palette that is set on
+; a surface, although the palette does hold them. The game sends its palette twice at the
+; start of a race and stopped with "could set entries (undefined error condition)". Its
+; SetEntries wrapper now reads the entries back after that error and accepts the call when
+; the colors already match.
+;
+; The first part sits in the unused end of the code section, the second in the unused end
+; of the .rdata section (VA 0x58C470 to 0x58D000), which the patcher marks executable, and
+; the third is the 6 bytes that redirect the SetEntries call at VA 0x4C9EF7. The three
+; parts follow each other in the output file: the first is 2808 bytes, the third 6 bytes.
 
 bits 32
 org 0x575500
@@ -48,6 +73,8 @@ PARENT_KEY    equ 0x5aa034
 
 GetModuleHandleA equ 0x5760a0           ; import table slots
 GetProcAddress   equ 0x5760fc
+DirectDrawCreate equ 0x576008
+IID_IDIRECT3D2   equ 0x578d50           ; the game's copy of the GUID
 GetSystemMetrics equ 0x5761f4
 GetVersion       equ 0x5760ac
 GetTickCount     equ 0x576198
@@ -75,6 +102,13 @@ WHEEL_TIMER       equ 0x403170          ; ecx = controls, physics object on the 
 RESET_CAR         equ 0x40e5a0          ; car, its place on the road, 0
 RACER_CONTROLS    equ 0x5cea7c          ; the controls of the first racer
 ERROR_TEXT        equ 0x4bb290          ; text for a DirectDraw or Direct3D error, takes the error
+GAME_LOG          equ 0x4c3fa0          ; writes a format and its values to debug.txt
+MAKE_ZBUFFER      equ 0x4c0610          ; the game's Z-buffer: focus, depth, width, height
+MAKE_DEVICE       equ 0x4bbc50          ; thiscall, the device's GUID by value, returns the HRESULT
+DEVICE_MADE       equ 0x4bbed4          ; where FUN_004BBD40 goes on once it has a device
+HAL_GUID          equ 0x578d40          ; IID_IDirect3DHALDevice, the game's copy
+Z_SURFACE         equ 0x73b774          ; the Z-buffer
+Z_ATTACHED        equ 0x73b77c
 FATAL_ERROR       equ 0x4c4150          ; shows a format in the game's "Fout" box and quits
 D3DEV_FILE        equ 0x5b21a8          ; "C:\Work\DX3D\D3dev.cpp"
 HAL_ERROR_FORMAT  equ 0x5b2238          ; "(%s):%d Could not create HAL device: %s,%d"
@@ -125,8 +159,10 @@ COLOR_SEQUENCE equ 0x751fa4             ; steps through the values of color_roun
 FLASH_TIME   equ 0x751fa8               ; float, how long the flash of a speed camera has lasted
 TICK_BASE    equ 0x751fac               ; GetTickCount when the communicator first asked, minus 1
 HAL_ERROR    equ 0x751fb0               ; why Direct3D refused the hardware device
+Z_DEPTH      equ 0x751fb4               ; depth of the Z-buffer create_zbuffer made last
+Z_ONLY_16    equ 0x751fb8               ; byte, 1 once a deeper Z-buffer cost the hardware device
 
-MODE_COUNT    equ 12
+MODE_COUNT    equ 9                     ; the current mode, the 16-bit and the 24-bit entries
 
 STATE_ALPHATESTENABLE  equ 0x0f
 STATE_TEXTUREMAPBLEND  equ 0x15
@@ -333,7 +369,7 @@ startup:
 .got:
     add esp, 156
 .fill:
-    mov esi, mode_entries
+    call choose_resolution              ; may lower ebx and ebp, and sets esi to mode_entries
     mov ecx, MODE_COUNT
 .next_mode:
     lodsd
@@ -514,40 +550,11 @@ text_starts_with:
     pop edi
     ret
 
-; Replaces the call to IDirectDraw::CreateSurface for the Z-buffer. Same contract
-; as the COM call: four arguments, callee cleans up, returns the HRESULT. The game
-; asks for 16 bits, which is too coarse for its 1.33 to 12500 view range, so surfaces
-; close together flicker. Ask for more from Windows Vista on: older cards could
-; refuse a Z-buffer of another depth than the 16-bit screen only when drawing.
+; Replaces the call to IDirectDraw::CreateSurface for the Z-buffer: see
+; create_zbuffer_deeper in the second part.
 create_zbuffer:
-    push esi
-    mov esi, [esp+12]                   ; surface description
-    call [GetVersion]
-    cmp al, 6
-    jb .last_try
-    mov dword [esi+0x18], 24            ; dwZBufferBitDepth
-    call .create
-    test eax, eax
-    jz .done
-    mov dword [esi+0x18], 32
-    call .create
-    test eax, eax
-    jz .done
-    mov dword [esi+0x18], 16
-.last_try:
-    call .create
-.done:
-    pop esi
-    ret 16
-.create:
-    push dword [esp+24]
-    push dword [esp+24]
-    push dword [esp+24]
-    push dword [esp+24]
-    mov eax, [esp]
-    mov ecx, [eax]
-    call [ecx+0x18]
-    ret
+    jmp near create_zbuffer_deeper      ; since v1.5.6 in the second part, which remembers the depth
+    times 88 - ($ - create_zbuffer) nop   ; nothing after it moves
 
 ; Replaces both QueryPerformanceCounter calls of the game timer. That counter runs
 ; from when Windows started, which only adds a large number that means nothing here.
@@ -734,16 +741,13 @@ trailer_fade:
 ; have no real 16-bit modes and convert every frame on its way to the screen, and that
 ; cost grows with the resolution. From Windows Vista on, as for the deeper Z-buffer, ask
 ; for 32 bits. The game keeps its own depth of 16, and its textures stay 16-bit.
+; Since the 8-bit modes keep their own size, the 4:3 reference width of parts 2 and 5 can no
+; longer come from the display at startup alone: depth_and_reference in the second part works
+; it out again from the mode the game is about to set, and does what this did. These 27 bytes
+; keep their place so that nothing after them moves.
 display_depth:
-    call [GetVersion]
-    mov edx, screen_depth
-    cmp edx, 16
-    jne .done
-    cmp al, 6
-    jb .done
-    mov edx, 32
-.done:
-    ret
+    jmp depth_and_reference
+    times 27 - ($ - display_depth) nop
 
 ; Replaces the conversion and store of one pixel in the game's image loader, with the
 ; color and its depth on the stack, and the place to write in edi. The loading picture
@@ -1271,14 +1275,11 @@ frame_limit:
     ret
 
 ; Replaces reading the focus where the game logs why Direct3D refused the hardware device:
-; it passed the focus instead of the error, so the log never said why. Keep the error, and
-; push it twice as the game did, once as room on the stack and once for its text.
+; it passed the focus instead of the error, so the log never said why. See hal_refused in
+; the second part, which keeps the error and may try once more with a 16-bit Z-buffer.
 hal_failed:
-    mov [HAL_ERROR], eax
-    pop ecx
-    push eax
-    push eax
-    jmp ecx
+    jmp near hal_refused                ; since v1.5.6 in the second part, which can try again
+    times 10 - ($ - hal_failed) nop     ; nothing after it moves
 
 ; Jumps here when Direct3D refused both the hardware and the software device. The game went
 ; on without a device and stopped with "Unhandled exception!" where it first used it. Stop
@@ -1315,13 +1316,481 @@ text_cur_pos:       db "STRING_CUR_POS", 0
 text_portraits:     db "OVL_PORTRAITS_", 0
 text_player:        db "PLAYER_", 0
 
-; The current display mode, then the 11 entries of the game's mode table from 640x480 up,
-; at 8, 16 and 24 bits.
+; The current display mode, then the entries of the game's mode table from 640x480 up at
+; 16 bits (5) and 24 bits (3): startup fills the first MODE_COUNT of these. The three 8-bit
+; entries at the end are no longer filled: with "3D kaart" off the game renders in software
+; and draws its sky and loading pictures as 2D images made for 640x480, which broke at a
+; large size ("gfx_sky.cpp(102) : blitting error"), and software rendering gains nothing
+; from more pixels. They stay in the table so that nothing else moves.
 align 4
 mode_entries:
-    dd 0x5b3798, 0x5b37ec, 0x5b3800, 0x5b3814, 0x5b3864, 0x5b3878
-    dd 0x5b388c, 0x5b38a0, 0x5b38b4, 0x5b3904, 0x5b3918, 0x5b392c
+    dd 0x5b3798, 0x5b3864, 0x5b3878, 0x5b388c, 0x5b38a0, 0x5b38b4
+    dd 0x5b3904, 0x5b3918, 0x5b392c, 0x5b37ec, 0x5b3800, 0x5b3814
 
 ; 0 follows the display. The patcher writes a fixed resolution here on request.
 fixed_width:  dd 0
 fixed_height: dd 0
+
+; ---------------------------------------------------------------------------------------
+; Second part: in the unused end of the .rdata section. Written at file offset 0x18C470.
+; ---------------------------------------------------------------------------------------
+section cave follows=.text vstart=0x58c470
+
+DDSCL_NORMAL        equ 8
+DDSD_CAPS_HEIGHT_WIDTH equ 7
+DDSCAPS_3D_TARGET   equ 0x6040          ; OFFSCREENPLAIN | 3DDEVICE | VIDEOMEMORY
+DEVMODE_SIZE        equ 156
+DM_SIZE             equ 36              ; word, in DEVMODEA
+DM_PELS_WIDTH       equ 108
+DM_PELS_HEIGHT      equ 112
+
+; Frame of choose_resolution, on top of the DEVMODEA.
+FN          equ 156                     ; EnumDisplaySettingsA
+LAST_ERR    equ 160                     ; key of the mode last tried: aspect error, then area
+LAST_AREA   equ 164
+BEST_ERR    equ 168                     ; best key of this round, -1 when none
+BEST_AREA   equ 172
+BEST_W      equ 176
+BEST_H      equ 180
+INDEX       equ 184                     ; mode index for EnumDisplaySettingsA
+FRAME       equ 188
+
+; Called from startup with the display's resolution, or the fixed one, in ebx and ebp.
+; Keeps them when Direct3D accepts a render target of that size. Otherwise it tries the
+; modes Windows offers, best first: the nearest shape, and of those the largest, and
+; takes the first one Direct3D accepts. Each mode's key is its aspect error, which is 0
+; for the display's own shape, then its area. A round finds the smallest key above the
+; one last tried, so no mode is probed twice and the display's own size, already refused,
+; is skipped. When no mode is accepted ebx and ebp stay as they were, and the game then
+; stops with the device's error as before. Ends with esi = mode_entries for startup.
+choose_resolution:
+    push ebp
+    push ebx
+    call probe
+    test eax, eax
+    jnz .done
+    push user32_name
+    call [GetModuleHandleA]
+    test eax, eax
+    jz .done
+    push enum_settings_name
+    push eax
+    call [GetProcAddress]
+    test eax, eax
+    jz .done
+    sub esp, FRAME
+    mov [esp+FN], eax
+    mov edi, esp
+    mov ecx, DEVMODE_SIZE / 4
+    xor eax, eax
+    rep stosd
+    mov word [esp+DM_SIZE], DEVMODE_SIZE
+    mov [esp+LAST_ERR], eax             ; the display itself: error 0 ...
+    mov eax, ebx
+    imul eax, ebp
+    mov [esp+LAST_AREA], eax            ; ... and its area, so it isn't tried again
+.round:
+    or dword [esp+BEST_ERR], -1
+    and dword [esp+INDEX], 0
+.next_mode:
+    lea eax, [esp]
+    push eax
+    push dword [esp+4+INDEX]
+    push 0                              ; the primary display
+    call [esp+12+FN]
+    test eax, eax
+    jz .round_done
+    inc dword [esp+INDEX]
+    mov edx, [esp+DM_PELS_WIDTH]
+    mov ecx, [esp+DM_PELS_HEIGHT]
+    test ecx, ecx
+    jz .next_mode
+    cmp edx, ebx                        ; never larger than the display
+    ja .next_mode
+    cmp ecx, ebp
+    ja .next_mode
+    mov eax, edx
+    imul eax, ebp                       ; w * H
+    mov esi, ebx
+    imul esi, ecx                       ; W * h
+    sub eax, esi
+    mov esi, eax
+    sar esi, 31
+    xor eax, esi
+    sub eax, esi                        ; |w * H - W * h|
+    push edx
+    xor edx, edx
+    div ecx                             ; / h: the aspect error, 0 for the same shape
+    pop edx
+    mov esi, edx
+    imul esi, ecx                       ; the area
+    cmp eax, [esp+LAST_ERR]             ; only keys above the one last tried
+    ja .candidate
+    jb .next_mode
+    cmp esi, [esp+LAST_AREA]
+    jae .next_mode
+.candidate:
+    cmp dword [esp+BEST_ERR], -1
+    je .take
+    cmp eax, [esp+BEST_ERR]             ; the smallest key of the round
+    jb .take
+    ja .next_mode
+    cmp esi, [esp+BEST_AREA]
+    jbe .next_mode
+.take:
+    mov [esp+BEST_ERR], eax
+    mov [esp+BEST_AREA], esi
+    mov [esp+BEST_W], edx
+    mov [esp+BEST_H], ecx
+    jmp .next_mode
+.round_done:
+    mov eax, [esp+BEST_ERR]
+    cmp eax, -1
+    je .give_up
+    mov [esp+LAST_ERR], eax
+    mov eax, [esp+BEST_AREA]
+    mov [esp+LAST_AREA], eax
+    push dword [esp+BEST_H]
+    push dword [esp+4+BEST_W]
+    call probe
+    test eax, eax
+    jz .round
+    mov ebx, [esp+BEST_W]
+    mov ebp, [esp+BEST_H]
+.give_up:
+    add esp, FRAME
+.done:
+    mov esi, mode_entries
+    ret
+
+; Does Direct3D accept a render target of the width and height on the stack? Creates a
+; DirectDraw object in normal cooperative level, with no window, an off-screen 3D surface
+; in video memory of that size, and the hardware device on it through IDirect3D2, the
+; interface the game uses, then releases all of it. Returns 1 in eax when the device was
+; created, otherwise 0. Keeps ebx, esi, edi and ebp.
+P_DESC      equ 0                       ; DDSURFACEDESC, 0x6c bytes
+P_DD        equ 0x6c
+P_SURFACE   equ 0x70
+P_D3D       equ 0x74
+P_DEVICE    equ 0x78
+P_RESULT    equ 0x7c
+P_FRAME     equ 0x80
+P_WIDTH     equ P_FRAME + 16            ; the arguments, above three pushes and the return
+P_HEIGHT    equ P_FRAME + 20
+
+probe:
+    push ebx
+    push esi
+    push edi
+    sub esp, P_FRAME
+    mov edi, esp
+    mov ecx, P_FRAME / 4
+    xor eax, eax
+    rep stosd
+    lea eax, [esp+P_DD]
+    push 0
+    push eax
+    push 0
+    call [DirectDrawCreate]
+    test eax, eax
+    jnz .out
+    mov ebx, [esp+P_DD]
+    push DDSCL_NORMAL
+    push 0
+    push ebx
+    mov eax, [ebx]
+    call [eax+0x50]                     ; SetCooperativeLevel
+    mov dword [esp+P_DESC], 0x6c        ; dwSize
+    mov dword [esp+P_DESC+4], DDSD_CAPS_HEIGHT_WIDTH
+    mov eax, [esp+P_HEIGHT]
+    mov [esp+P_DESC+8], eax
+    mov eax, [esp+P_WIDTH]
+    mov [esp+P_DESC+0xc], eax
+    mov dword [esp+P_DESC+0x68], DDSCAPS_3D_TARGET
+    push 0
+    lea eax, [esp+4+P_SURFACE]
+    push eax
+    lea eax, [esp+8+P_DESC]
+    push eax
+    push ebx
+    mov eax, [ebx]
+    call [eax+0x18]                     ; CreateSurface
+    test eax, eax
+    jnz .release_dd
+    lea eax, [esp+P_D3D]
+    push eax
+    push IID_IDIRECT3D2
+    push ebx
+    mov eax, [ebx]
+    call [eax]                          ; QueryInterface
+    test eax, eax
+    jnz .release_surface
+    mov esi, [esp+P_D3D]
+    lea eax, [esp+P_DEVICE]
+    push eax
+    push dword [esp+4+P_SURFACE]
+    push hal_device_guid
+    push esi
+    mov eax, [esi]
+    call [eax+0x20]                     ; IDirect3D2::CreateDevice
+    test eax, eax
+    jnz .release_d3d
+    inc dword [esp+P_RESULT]
+    mov ecx, [esp+P_DEVICE]
+    push ecx
+    mov eax, [ecx]
+    call [eax+8]                        ; Release
+.release_d3d:
+    push esi
+    mov eax, [esi]
+    call [eax+8]
+.release_surface:
+    mov ecx, [esp+P_SURFACE]
+    push ecx
+    mov eax, [ecx]
+    call [eax+8]
+.release_dd:
+    push ebx
+    mov eax, [ebx]
+    call [eax+8]
+.out:
+    mov eax, [esp+P_RESULT]
+    add esp, P_FRAME
+    pop edi
+    pop esi
+    pop ebx
+    ret 8
+
+; IID_IDirect3DHALDevice {84E63DE0-46AA-11CF-816F-0000C020156E}
+hal_device_guid:
+    dd 0x84e63de0
+    dw 0x46aa, 0x11cf
+    db 0x81, 0x6f, 0x00, 0x00, 0xc0, 0x20, 0x15, 0x6e
+
+; Reached from display_depth, right before the game sets its display mode, with the mode in
+; the current-mode entry. The 4:3 reference width for the height of that mode, (H * 4 + 1) / 3,
+; goes where parts 2 and 5 read it: startup stored the display's, which is right for the 16-bit
+; and 24-bit modes, but an 8-bit mode keeps the game's own 640x480 and needs 640 there. Then
+; the depth, as display_depth did: 32 bits from Windows Vista on for a 16-bit mode. Only eax,
+; ecx and edx may change here, and edx returns the depth.
+depth_and_reference:
+    mov eax, screen_height
+    lea eax, [eax*4+1]
+    xor edx, edx
+    mov ecx, 3
+    div ecx
+    mov reference_width, eax
+    call [GetVersion]
+    mov edx, screen_depth
+    cmp edx, 16
+    jne .done
+    cmp al, 6
+    jb .done
+    mov edx, 32
+.done:
+    ret
+
+; Replaces the call to IDirectDrawPalette::SetEntries in the game's wrapper (FUN_004C9E70),
+; which stops the game on any error. Called with the palette, the first entry, the count
+; and the entries on the stack, in that order from the top; the wrapper has already checked
+; that first + count is at most 256. Makes the same call, and when it returns E_FAIL reads
+; the entries back and compares the colors: when they already match, the palette holds
+; what was asked, so this returns 0. Any other error, and any real difference, is returned
+; as before. Callee cleans the four arguments, as the COM call cleaned its five.
+E_FAIL              equ 0x80004005
+PE_PALETTE          equ 20                  ; after four saved registers and the return
+PE_START            equ 24
+PE_COUNT            equ 28
+PE_ENTRIES          equ 32
+PE_BUFFER           equ 1024                ; 256 entries of 4 bytes
+
+palette_set_entries:
+    push ebx
+    push esi
+    push edi
+    push ebp
+    mov ebp, esp
+    sub esp, PE_BUFFER
+    mov ebx, [ebp+PE_PALETTE]
+    push dword [ebp+PE_ENTRIES]
+    push dword [ebp+PE_COUNT]
+    push dword [ebp+PE_START]
+    push 0
+    push ebx
+    mov eax, [ebx]
+    call [eax+0x18]                     ; SetEntries
+    cmp eax, E_FAIL
+    jne .done
+    mov edi, esp                        ; the buffer
+    push edi
+    push dword [ebp+PE_COUNT]
+    push dword [ebp+PE_START]
+    push 0
+    push ebx
+    mov eax, [ebx]
+    call [eax+0x10]                     ; GetEntries
+    test eax, eax
+    jnz .failed
+    mov esi, [ebp+PE_ENTRIES]
+    mov ecx, [ebp+PE_COUNT]
+    jecxz .same
+.compare:
+    mov eax, [esi]
+    xor eax, [edi]
+    and eax, 0x00ffffff                 ; red, green, blue; not peFlags
+    jnz .failed
+    add esi, 4
+    add edi, 4
+    dec ecx
+    jnz .compare
+.same:
+    xor eax, eax
+    jmp short .done
+.failed:
+    mov eax, E_FAIL
+.done:
+    mov esp, ebp
+    pop ebp
+    pop edi
+    pop esi
+    pop ebx
+    ret 16
+
+; Replaces the call to IDirectDraw::CreateSurface for the Z-buffer (create_zbuffer in the
+; first part jumps here). Same contract as the COM call: four arguments, callee cleans up,
+; returns the HRESULT. The game asks for 16 bits, which is too coarse for its 1.33 to 12500
+; view range, so surfaces close together flicker. Ask for 24, then 32, from Windows Vista on:
+; older cards could refuse a Z-buffer of another depth than the 16-bit screen only when
+; drawing. Remembers the depth it made in Z_DEPTH, and asks only for the game's own once
+; Z_ONLY_16 is set.
+create_zbuffer_deeper:
+    push esi
+    mov esi, [esp+12]                   ; surface description
+    mov dword [Z_DEPTH], 16
+    cmp byte [Z_ONLY_16], 0
+    jne .last_try
+    call [GetVersion]
+    cmp al, 6
+    jb .last_try
+    mov dword [esi+0x18], 24            ; dwZBufferBitDepth
+    call .create
+    test eax, eax
+    jz .deeper
+    mov dword [esi+0x18], 32
+    call .create
+    test eax, eax
+    jz .deeper
+    mov dword [esi+0x18], 16
+.last_try:
+    call .create
+    pop esi
+    ret 16
+.deeper:
+    mov ecx, [esi+0x18]
+    mov [Z_DEPTH], ecx
+    pop esi
+    ret 16
+.create:
+    push dword [esp+24]
+    push dword [esp+24]
+    push dword [esp+24]
+    push dword [esp+24]
+    mov eax, [esp]
+    mov ecx, [eax]
+    call [ecx+0x18]
+    ret
+
+; Reached from hal_failed in the first part, when Direct3D refused the hardware device, with
+; its error in eax and the device object in esi (FUN_004BBD40). The game then logs why and
+; tries the software device. A Windows 11 VM with Microsoft's renderer on a virtio GPU puts
+; a deeper Z-buffer in system memory and then refuses the hardware device with
+; D3DERR_ZBUFF_NEEDS_VIDEOMEMORY, where the game's own 16-bit Z-buffer works. So on that
+; error, with a Z-buffer deeper than 16 bits: log the refusal, take that Z-buffer off its
+; surface, let the game make its own 16-bit one with FUN_004C0610, which attaches it, and ask
+; for the hardware device once more. If that works, go on where the game goes with a device.
+; Anything else goes on as before: keep the error, and push it twice as the game pushed the
+; focus, once as room on the stack and once for its text.
+D3DERR_ZBUFF_NEEDS_VIDEOMEMORY equ 0x887602ea
+
+hal_refused:
+    mov [HAL_ERROR], eax
+    cmp eax, D3DERR_ZBUFF_NEEDS_VIDEOMEMORY
+    jne .as_before
+    cmp dword [Z_DEPTH], 16
+    jbe .as_before
+    mov ecx, [esi+0x270]                ; the focus, which says what the Z-buffer is on
+    mov edx, [0x7408ac]
+    test ecx, ecx
+    jz .surface
+    mov edx, [0x7408b0]
+    dec ecx
+    jz .surface
+    mov edx, [0x740890]
+    dec ecx
+    jnz .as_before
+.surface:
+    push edx
+    push eax
+    push eax
+    call ERROR_TEXT
+    add esp, 4                          ; the error stays for the %d
+    push eax
+    push 253                            ; the game's own line for this refusal
+    push D3DEV_FILE
+    push HAL_ERROR_FORMAT
+    call GAME_LOG
+    add esp, 20
+    push retry_text
+    call GAME_LOG
+    add esp, 4
+    pop edx
+    push dword [Z_SURFACE]
+    push 0
+    push edx
+    mov eax, [edx]
+    call [eax+0x20]                     ; IDirectDrawSurface::DeleteAttachedSurface
+    mov ecx, [Z_SURFACE]
+    push ecx
+    mov eax, [ecx]
+    call [eax+8]                        ; Release
+    and dword [Z_SURFACE], 0
+    and dword [Z_ATTACHED], 0
+    mov byte [Z_ONLY_16], 1             ; and for the rest of this run
+    push screen_height
+    push screen_width
+    push 16
+    push dword [esi+0x270]
+    call MAKE_ZBUFFER                   ; stops with the game's own error if it can't
+    add esp, 16
+    sub esp, 16                         ; the GUID, by value
+    mov eax, [HAL_GUID]
+    mov [esp], eax
+    mov eax, [HAL_GUID+4]
+    mov [esp+4], eax
+    mov eax, [HAL_GUID+8]
+    mov [esp+8], eax
+    mov eax, [HAL_GUID+12]
+    mov [esp+12], eax
+    mov ecx, esi
+    call MAKE_DEVICE
+    mov [HAL_ERROR], eax
+    test eax, eax
+    jnz .as_before
+    add esp, 4                          ; not back to the refusal
+    jmp DEVICE_MADE
+.as_before:
+    pop ecx
+    push eax
+    push eax
+    jmp ecx
+
+retry_text: db "hardware device again, with a 16-bit z-buffer", 10, 0
+
+; ---------------------------------------------------------------------------------------
+; Third part: the redirected call in the SetEntries wrapper, at VA 0x4C9EF7, file 0xC9EF7.
+; Replaces "push 0 / push eax / call [ecx+0x18]" (6A 00 50 FF 51 18), with the entries,
+; the count and the first entry already pushed and the palette in eax.
+; ---------------------------------------------------------------------------------------
+section site follows=cave vstart=0x4c9ef7
+    push eax
+    call palette_set_entries

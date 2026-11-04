@@ -3,7 +3,7 @@
 This folder contains the source code for the patcher, `A2Racer4Fixes`. The 64-bit Windows and both Linux versions are written in Go. Build the whole folder (`.`), not a single `.go` file:
 - `admin_windows.go` and `admin_other.go` hold the platform-specific parts;
 - `rsrc_windows_amd64.syso` adds the Windows manifest that asks for administrator rights;
-- `spel_patch.asm` is the source of the code added to `spel.dat`, whose bytes are in both patchers. Rebuild it with `nasm -f bin -o spel_patch.bin spel_patch.asm`;
+- `spel_patch.asm` is the source of the code added to `spel.dat`, whose bytes are in both patchers. Rebuild it with `nasm -f bin -o spel_patch.bin spel_patch.asm`. The output holds its three parts one after the other: 2808 bytes for `0x175500`, ending with the fixed resolution, 1204 bytes for `0x18C470` and 6 bytes for `0xC9EF7`;
 - `launcher_patch.asm` is the same for the code added to `A2Racer4.exe`. Rebuild it with `nasm -f bin -o launcher_patch.bin launcher_patch.asm`;
 - `win32/` holds the separate C version for 32-bit Windows, which covers the systems current Go cannot target.
 
