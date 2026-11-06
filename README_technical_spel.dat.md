@@ -59,7 +59,7 @@ file offset 0x1B3798 -> VA 0x005B3798
 | 14 | The menu no longer stops at startup, and the turbo and the smoke keep working, when Windows has been running for 24.9 to 49.7 days |
 | 15 | `A2Racer4.exe` answers its messages while the menu or a race runs, so under Wine the menu no longer stays black for 6 seconds |
 | 16 | When Direct3D refuses its 3D device, the race says why, instead of stopping with "Unhandled exception!" |
-| 17 | When Direct3D refuses the display's size, as Windows 11 does above 2048 pixels, the race uses the largest mode of the same shape that it accepts |
+| 17 | Windows 10 and 11 refuse a Direct3D 1 to 7 render target above 2048 pixels; the patch removes that check from Direct3D in memory while the game runs, and otherwise uses the largest mode of the same shape that Direct3D accepts |
 | 18 | With the 3D card off, an unchanged palette no longer stops the race on Windows 11 |
 
 ## Patch part 1: display-mode table
@@ -998,11 +998,27 @@ So the rule is a width and a height of at most 2048 each, whatever the number of
 
 Not the cause, each tested on that PC: the deeper Z-buffer of part 8 (16 and 32 bits gave the same), the 32-bit mode of part 10 (16 bits gave the same), the compatibility settings on `A2Racer4.exe` that the race inherits, the driver version and the texture formats.
 
+The check itself is in Microsoft's Direct3D modules for the old interfaces: `d3dim.dll`, which `ddraw.dll` loads for `IDirect3D` to `IDirect3D3` and so for this game's `IDirect3D2`, and `d3dim700.dll` for `IDirect3D7`. Each holds it twice, in the same shape, where a device is created on a surface that has `DDSCAPS_3DDEVICE` and isn't a Z-buffer:
+
+```text
+B8 00 08 00 00    mov eax, 2048
+39 45 9C          cmp [width], eax
+0F 87 ..          ja refuse
+39 45 98          cmp [height], eax
+0F 87 ..          ja refuse
+```
+
+That is the whole limit: a constant, not a capability of the driver. The Windows 10 LTSC 2021 files (19044) have it, and Windows 11 behaves the same. Nothing in Microsoft's documentation says why. dxwrapper names it in its README, as the `LegacyD3DResolutionHack` option, taken from UCyborg's project of that name, and the owner found that dxwrapper with `Dd7to9` runs the race at 2560x1440 on an RX 6600 XT: that option replaces `ddraw.dll` altogether and draws through Direct3D 9, so Microsoft's modules with the check never run.
+
 ### The fix
 
 `startup` calls `choose_resolution` with the resolution it found, from the display or fixed by the patcher. That first calls `probe`, which asks Direct3D whether it accepts a render target of that size, without a window and without changing the display mode: `DirectDrawCreate`, `SetCooperativeLevel(NULL, DDSCL_NORMAL)`, an off-screen surface with `DDSCAPS_OFFSCREENPLAIN | DDSCAPS_3DDEVICE | DDSCAPS_VIDEOMEMORY`, `QueryInterface` for `IDirect3D2` and `CreateDevice` for the hardware device on that surface. Then it releases all of it. One probe took about 50 ms on that PC.
 
-- Accepted: nothing changes. That is every display up to 2048x2048, and any size under Wine.
+Since v1.5.7, right after that `QueryInterface`, which is when `ddraw.dll` loads its Direct3D module, `probe` calls `unlock_d3d`. That looks up `VirtualProtect` in `kernel32.dll`, and for `d3dim.dll` and `d3dim700.dll`, when `GetModuleHandleA` says the module is loaded, goes through its code, from `BaseOfCode` for `SizeOfCode` bytes of its PE header, for every `B8 00 08 00 00 39`: `mov eax, 2048` followed by a `cmp` with `eax`. It makes each one `mov eax, -1`, which no width or height is above, through `VirtualProtect` with `PAGE_EXECUTE_READWRITE` and the old protection back after the write. That is what dxwrapper's `LegacyD3DResolutionHack` does, in the game's own process and only in memory: the files on disk don't change, and the change ends with the game. The probe that follows then accepts the display's size, so the race runs at it. Where the modules aren't loaded, as under Wine, or hold no such bytes, nothing is changed and the probe decides as before, so the fallback below still covers a Windows build that differs.
+
+`hal_refused` of part 8 also handles `DDERR_INVALIDOBJECT`, the error of that check: it runs `unlock_d3d` again and, when that changed something, asks for the hardware device once more. That covers `ddraw.dll` loading its Direct3D module anew between the probe and the race, which wasn't seen.
+
+- Accepted: nothing changes. That is every display up to 2048x2048, any size on Windows 10 and 11 once the check above is removed, and any size under Wine.
 - Refused: it goes through the modes that `EnumDisplaySettingsA` lists, no larger than the display, best first, and takes the first one Direct3D accepts. Best is the nearest shape, by the error `|w × H − W × h| / h`, which is 0 for the display's own shape, and of those the largest. Each round looks for the smallest key above the one tried last, so no size is probed twice. 2560x1440 and 3840x2160 give 1920x1080.
 - Nothing accepted, or no DirectDraw: the resolution stays as it was, and the race stops with the box of part 16.
 
@@ -1015,11 +1031,14 @@ That code is the second part of the added code, at the end of `.rdata`, because 
 - On that Windows 11 PC, with a build from before the Z-buffer retry of part 8: the probe refused 2560x1440, the race set 1920x1080 at 32 bits, the hardware device was created and the race ran, also with the compatibility settings the launcher there passes on. The author then started the game through the launcher there and found that the race looks right.
 - Under Wine 11.20 (Staging) with software rendering, on a 1024x768 and a 2560x1440 desktop: the probe accepted the size and the race ran at it. A test copy whose `probe` refuses anything above 2048, as that Windows does, chose 1920x1080 on the 2560x1440 desktop, and the race ran at that size with the HUD placed for 16:9.
 - In a Windows 11 VM with Microsoft's renderer on a virtio GPU at 2560x1440: v1.5.5 stopped with "Could not create HAL device: pointer is not a dd object", as reported. v1.5.6 chose 1920x1080 and set that mode. A fixed 2560x1440 from the patcher gave 1920x1080 as well. That VM refuses the hardware device for the deeper Z-buffer of part 8, so v1.5.6 tries again with 16 bits: the hardware device was created at 1920x1080 and the race ran there with the 3D view and the HUD in place.
+- v1.5.7 in that VM: the probe accepted 2560x1440 after the unlock, and the race set 2560x1440. The hardware device was then refused for the Z-buffer, with 16 bits too: `D3DERR_ZBUFF_NEEDS_VIDEOMEMORY`, the VM's display adapter running out of video memory at that size, not the 2048 check, which had answered with another error. The race ran at 2560x1440 on the software device instead. With a fixed 2560x1080 from the patcher, the race set that mode, and the hardware device came after the retry with 16 bits, with no software fallback: past the check, a width above 2048 works on the hardware path there. At 1280x800 the hardware device came after the retry with 16 bits, as before.
+- The assembled `unlock_d3d`, run under Wine against the Windows 10 `d3dim.dll` and `d3dim700.dll` loaded without running them: 4 places changed, 2 in each, and a second run finds none. Under Wine itself the modules don't exist, so the race starts as before.
+- The unlock on a real graphics card: the owner found that dxwrapper's Direct3D 9 path runs the race at 2560x1440 on an RX 6600 XT, so the card has no such limit itself. This patch's unlock on that PC is the test that remains.
 - In a Windows 98 SE VM, whose DirectX is a Wine-based wrapper with software rendering: the probe accepted 1600x900, the hardware device was created and the race's logic ran. That VM shows no 3D picture with any version, the original game included.
 
 ### What this doesn't establish
 
-- Whether Windows 10, or other drivers, have the same limit. Where the size is accepted nothing changes, so the fix holds either way.
+- Whether the hardware device, past the check, draws the race at 2560x1440 on a real graphics card: the VM has too little video memory for that size, though it did take 2560x1080, and dxwrapper's result on the RX 6600 XT went through Direct3D 9. Windows 10 has the check in its files; whether it refused the device there wasn't run.
 - A fixed resolution above 2048 on real hardware. In the Windows 11 VM it went through the same code and gave 1920x1080.
 
 ## Patch part 18: the 8-bit palette
@@ -1099,7 +1118,7 @@ C9 63 89 CA D1 EA 85 C0 79 02 F7 DA 01 D0 99 F7 F9 C3 56 57 89 C6 83 EC
 00 E8 2F 00 00 00 74 19 89 F0 BF B7 5F 57 00 E8 21 00 00 00 74 0B 31 C0
 EB 0A B8 01 00 00 00 EB 03 83 C8 FF 83 C4 40 5F 5E C3 E8 06 00 00 00 75
 03 80 38 00 C3 57 8A 0F 84 C9 74 17 8A 28 80 FD 61 72 08 80 FD 7A 77 03
-80 ED 20 38 CD 75 04 40 47 EB E3 5F C3 E9 08 6F 01 00 90 90 90 90 90 90
+80 ED 20 38 CD 75 04 40 47 EB E3 5F C3 E9 0D 6F 01 00 90 90 90 90 90 90
 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90
 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90
 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90
@@ -1120,7 +1139,7 @@ E8 C9 FF FF FF D9 C0 D8 4C 24 04 D9 5C 24 04 D9 C0 D8 4C 24 08 D9 5C 24
 00 00 00 68 BE 5C 4A 00 C3 51 B8 80 96 4F 00 FF D0 59 31 C0 89 01 89 41
 04 89 41 08 C3 B9 30 1F 75 00 EB 05 B9 34 1F 75 00 D8 01 D9 C0 B8 24 85
 55 00 FF D0 50 DA 24 24 58 D9 19 C3 51 B9 3C 1F 75 00 E8 E2 FF FF FF 59
-C3 E9 7D 6C 01 00 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90
+C3 E9 82 6C 01 00 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90
 90 90 90 90 8B 44 24 5C 83 78 0C 20 74 19 FF 74 24 08 FF 74 24 08 E8 25
 27 F5 FF 83 C4 08 66 89 07 83 C7 02 C2 08 00 FF 74 24 04 E8 40 24 F5 FF
 83 C4 04 89 07 83 C7 04 C2 08 00 FF 74 24 04 B8 70 31 40 00 FF D0 60 8B
@@ -1168,7 +1187,7 @@ DF 2D 00 1F 75 00 DE E9 D8 71 04 D8 1D 13 5F 57 00 DF E0 9E 73 11 A1 00
 1F 75 00 59 E8 67 08 F3 FF B9 B0 28 71 00 E8 5D 09 F3 FF D8 05 94 1F 75
 00 D8 15 07 5F 57 00 DF E0 9E 0F 93 05 90 1F 75 00 72 15 D8 25 07 5F 57
 00 D8 15 07 5F 57 00 DF E0 9E 72 04 DD D8 D9 EE D9 1D 94 1F 75 00 C3 E9
-16 69 01 00 90 90 90 90 90 A1 B0 1F 75 00 50 50 E8 A3 53 F4 FF 59 50 68
+1B 69 01 00 90 90 90 90 90 A1 B0 1F 75 00 50 50 E8 A3 53 F4 FF 59 50 68
 FD 00 00 00 68 A8 21 5B 00 68 38 22 5B 00 E8 4D E2 F4 FF 00 00 C8 41 0A
 D7 23 3D 00 00 80 37 0A D7 23 3C 89 88 88 3B 00 00 10 40 00 00 00 3F 00
 00 40 40 00 00 C8 41 55 53 45 52 33 32 2E 44 4C 4C 00 45 6E 75 6D 44 69
@@ -1186,7 +1205,7 @@ After it, at `0x175FF0`, come two 32-bit values: a fixed width and height, or `0
 
 The display size check of part 17, the palette check of part 18 and the Z-buffer retry of part 8 no longer fit there. They go in unused space at the end of `.rdata`, file offset `0x18C470`, VA `0x0058C470`, which is all zero in the original. The rows for `0x000220` and `0x00023C` in the table raise the virtual size of `.rdata` from `0x16464` to `0x17000`, so that space is certainly mapped, and make the section executable. That code ends with 2 zero bytes of padding.
 
-1204 bytes at `0x18C470`:
+1580 bytes at `0x18C470`:
 
 ```text
 55 53 E8 75 01 00 00 85 C0 0F 85 67 01 00 00 68 27 5F 57 00 FF 15 A0 60
@@ -1206,40 +1225,55 @@ A8 00 00 00 89 B4 24 AC 00 00 00 89 94 24 B0 00 00 00 89 8C 24 B4 00 00
 24 B4 00 00 00 E8 22 00 00 00 85 C0 0F 84 06 FF FF FF 8B 9C 24 B0 00 00
 00 8B AC 24 B4 00 00 00 81 C4 BC 00 00 00 BE C0 5F 57 00 C3 53 56 57 81
 EC 80 00 00 00 89 E7 B9 20 00 00 00 31 C0 F3 AB 8D 44 24 6C 6A 00 50 6A
-00 FF 15 08 60 57 00 85 C0 0F 85 A4 00 00 00 8B 5C 24 6C 6A 08 6A 00 53
+00 FF 15 08 60 57 00 85 C0 0F 85 A9 00 00 00 8B 5C 24 6C 6A 08 6A 00 53
 8B 03 FF 50 50 C7 04 24 6C 00 00 00 C7 44 24 04 07 00 00 00 8B 84 24 94
 00 00 00 89 44 24 08 8B 84 24 90 00 00 00 89 44 24 0C C7 44 24 68 40 60
-00 00 6A 00 8D 44 24 74 50 8D 44 24 08 50 53 8B 03 FF 50 18 85 C0 75 4D
-8D 44 24 74 50 68 50 8D 57 00 53 8B 03 FF 10 85 C0 75 30 8B 74 24 74 8D
-44 24 78 50 FF 74 24 74 68 CB C6 58 00 56 8B 06 FF 50 20 85 C0 75 0E FF
-44 24 7C 8B 4C 24 78 51 8B 01 FF 50 08 56 8B 06 FF 50 08 8B 4C 24 70 51
-8B 01 FF 50 08 53 8B 03 FF 50 08 8B 44 24 7C 81 C4 80 00 00 00 5F 5E 5B
-C2 08 00 E0 3D E6 84 AA 46 CF 11 81 6F 00 00 C0 20 15 6E A1 9C 37 5B 00
-8D 04 85 01 00 00 00 31 D2 B9 03 00 00 00 F7 F1 A3 38 1F 75 00 FF 15 AC
-60 57 00 8B 15 A0 37 5B 00 83 FA 10 75 09 3C 06 72 05 BA 20 00 00 00 C3
-53 56 57 55 89 E5 81 EC 00 04 00 00 8B 5D 14 FF 75 20 FF 75 1C FF 75 18
-6A 00 53 8B 03 FF 50 18 3D 05 40 00 80 75 3A 89 E7 57 FF 75 1C FF 75 18
-6A 00 53 8B 03 FF 50 10 85 C0 75 20 8B 75 20 8B 4D 1C E3 14 8B 06 33 07
-25 FF FF FF 00 75 0D 83 C6 04 83 C7 04 49 75 EC 31 C0 EB 05 B8 05 40 00
-80 89 EC 5D 5F 5E 5B C2 10 00 56 8B 74 24 0C C7 05 B4 1F 75 00 10 00 00
-00 80 3D B8 1F 75 00 00 75 31 FF 15 AC 60 57 00 3C 06 72 27 C7 46 18 18
-00 00 00 E8 31 00 00 00 85 C0 74 20 C7 46 18 20 00 00 00 E8 21 00 00 00
-85 C0 74 10 C7 46 18 10 00 00 00 E8 11 00 00 00 5E C2 10 00 8B 4E 18 89
-0D B4 1F 75 00 5E C2 10 00 FF 74 24 18 FF 74 24 18 FF 74 24 18 FF 74 24
-18 8B 04 24 8B 08 FF 51 18 C3 A3 B0 1F 75 00 3D EA 02 76 88 0F 85 ED 00
-00 00 83 3D B4 1F 75 00 10 0F 86 E0 00 00 00 8B 8E 70 02 00 00 8B 15 AC
-08 74 00 85 C9 74 16 8B 15 B0 08 74 00 49 74 0D 8B 15 90 08 74 00 49 0F
-85 BA 00 00 00 52 50 50 E8 53 EA F2 FF 83 C4 04 50 68 FD 00 00 00 68 A8
-21 5B 00 68 38 22 5B 00 E8 4B 77 F3 FF 83 C4 14 68 F4 C8 58 00 E8 3E 77
-F3 FF 83 C4 04 5A FF 35 74 B7 73 00 6A 00 52 8B 02 FF 50 20 8B 0D 74 B7
-73 00 51 8B 01 FF 50 08 83 25 74 B7 73 00 00 83 25 7C B7 73 00 00 C6 05
-B8 1F 75 00 01 FF 35 9C 37 5B 00 FF 35 98 37 5B 00 6A 10 FF B6 70 02 00
-00 E8 62 3D F3 FF 83 C4 10 83 EC 10 A1 40 8D 57 00 89 04 24 A1 44 8D 57
-00 89 44 24 04 A1 48 8D 57 00 89 44 24 08 A1 4C 8D 57 00 89 44 24 0C 89
-F1 E8 72 F3 F2 FF A3 B0 1F 75 00 85 C0 75 08 83 C4 04 E9 E5 F5 F2 FF 59
-50 50 FF E1 68 61 72 64 77 61 72 65 20 64 65 76 69 63 65 20 61 67 61 69
-6E 2C 20 77 69 74 68 20 61 20 31 36 2D 62 69 74 20 7A 2D 62 75 66 66 65
-72 0A 00 00
+00 00 6A 00 8D 44 24 74 50 8D 44 24 08 50 53 8B 03 FF 50 18 85 C0 75 52
+8D 44 24 74 50 68 50 8D 57 00 53 8B 03 FF 10 85 C0 75 35 E8 2E 03 00 00
+8B 74 24 74 8D 44 24 78 50 FF 74 24 74 68 D0 C6 58 00 56 8B 06 FF 50 20
+85 C0 75 0E FF 44 24 7C 8B 4C 24 78 51 8B 01 FF 50 08 56 8B 06 FF 50 08
+8B 4C 24 70 51 8B 01 FF 50 08 53 8B 03 FF 50 08 8B 44 24 7C 81 C4 80 00
+00 00 5F 5E 5B C2 08 00 E0 3D E6 84 AA 46 CF 11 81 6F 00 00 C0 20 15 6E
+A1 9C 37 5B 00 8D 04 85 01 00 00 00 31 D2 B9 03 00 00 00 F7 F1 A3 38 1F
+75 00 FF 15 AC 60 57 00 8B 15 A0 37 5B 00 83 FA 10 75 09 3C 06 72 05 BA
+20 00 00 00 C3 53 56 57 55 89 E5 81 EC 00 04 00 00 8B 5D 14 FF 75 20 FF
+75 1C FF 75 18 6A 00 53 8B 03 FF 50 18 3D 05 40 00 80 75 3A 89 E7 57 FF
+75 1C FF 75 18 6A 00 53 8B 03 FF 50 10 85 C0 75 20 8B 75 20 8B 4D 1C E3
+14 8B 06 33 07 25 FF FF FF 00 75 0D 83 C6 04 83 C7 04 49 75 EC 31 C0 EB
+05 B8 05 40 00 80 89 EC 5D 5F 5E 5B C2 10 00 56 8B 74 24 0C C7 05 B4 1F
+75 00 10 00 00 00 80 3D B8 1F 75 00 00 75 31 FF 15 AC 60 57 00 3C 06 72
+27 C7 46 18 18 00 00 00 E8 31 00 00 00 85 C0 74 20 C7 46 18 20 00 00 00
+E8 21 00 00 00 85 C0 74 10 C7 46 18 10 00 00 00 E8 11 00 00 00 5E C2 10
+00 8B 4E 18 89 0D B4 1F 75 00 5E C2 10 00 FF 74 24 18 FF 74 24 18 FF 74
+24 18 FF 74 24 18 8B 04 24 8B 08 FF 51 18 C3 A3 B0 1F 75 00 3D 82 00 76
+88 74 7F 3D EA 02 76 88 0F 85 32 01 00 00 83 3D B4 1F 75 00 10 0F 86 25
+01 00 00 8B 8E 70 02 00 00 8B 15 AC 08 74 00 85 C9 74 16 8B 15 B0 08 74
+00 49 74 0D 8B 15 90 08 74 00 49 0F 85 FF 00 00 00 52 50 50 E8 47 EA F2
+FF 83 C4 04 50 68 FD 00 00 00 68 A8 21 5B 00 68 38 22 5B 00 E8 3F 77 F3
+FF 83 C4 14 68 45 C9 58 00 E8 32 77 F3 FF 83 C4 04 5A FF 35 74 B7 73 00
+6A 00 52 8B 02 FF 50 20 EB 43 E8 27 01 00 00 85 C0 0F 84 B1 00 00 00 A1
+B0 1F 75 00 50 50 E8 F5 E9 F2 FF 83 C4 04 50 68 FD 00 00 00 68 A8 21 5B
+00 68 38 22 5B 00 E8 ED 76 F3 FF 83 C4 14 68 74 C9 58 00 E8 E0 76 F3 FF
+83 C4 04 EB 3D 8B 0D 74 B7 73 00 51 8B 01 FF 50 08 83 25 74 B7 73 00 00
+83 25 7C B7 73 00 00 C6 05 B8 1F 75 00 01 FF 35 9C 37 5B 00 FF 35 98 37
+5B 00 6A 10 FF B6 70 02 00 00 E8 11 3D F3 FF 83 C4 10 83 EC 10 A1 40 8D
+57 00 89 04 24 A1 44 8D 57 00 89 44 24 04 A1 48 8D 57 00 89 44 24 08 A1
+4C 8D 57 00 89 44 24 0C 89 F1 E8 21 F3 F2 FF A3 B0 1F 75 00 85 C0 75 08
+83 C4 04 E9 94 F5 F2 FF 59 50 50 FF E1 68 61 72 64 77 61 72 65 20 64 65
+76 69 63 65 20 61 67 61 69 6E 2C 20 77 69 74 68 20 61 20 31 36 2D 62 69
+74 20 7A 2D 62 75 66 66 65 72 0A 00 68 61 72 64 77 61 72 65 20 64 65 76
+69 63 65 20 61 67 61 69 6E 2C 20 77 69 74 68 20 74 68 65 20 32 30 34 38
+20 70 69 78 65 6C 20 6C 69 6D 69 74 20 72 65 6D 6F 76 65 64 0A 00 60 31
+ED 68 69 CA 58 00 FF 15 A0 60 57 00 85 C0 74 29 68 76 CA 58 00 50 FF 15
+FC 60 57 00 85 C0 74 19 A3 BC 1F 75 00 68 85 CA 58 00 E8 10 00 00 00 68
+8F CA 58 00 E8 06 00 00 00 89 6C 24 1C 61 C3 FF 74 24 04 FF 15 A0 60 57
+00 85 C0 74 69 89 C3 8B 73 3C 01 DE 8B 7E 2C 01 DF 8B 76 1C 83 FE 06 72
+55 80 3F B8 75 4C 81 7F 01 00 08 00 00 75 43 80 7F 05 39 75 3D 6A 00 89
+E0 50 6A 40 6A 04 8D 47 01 50 FF 15 BC 1F 75 00 85 C0 74 1D 83 4F 01 FF
+6A 00 89 E0 50 FF 74 24 08 6A 04 8D 47 01 50 FF 15 BC 1F 75 00 83 C4 04
+45 83 C4 04 83 C6 FB 83 C7 05 47 4E EB A6 C2 04 00 4B 45 52 4E 45 4C 33
+32 2E 44 4C 4C 00 56 69 72 74 75 61 6C 50 72 6F 74 65 63 74 00 44 33 44
+49 4D 2E 44 4C 4C 00 44 33 44 49 4D 37 30 30 2E 44 4C 4C 00
 ```
 
 | File offset | Original | Patched | What |
@@ -1358,7 +1392,7 @@ F1 E8 72 F3 F2 FF A3 B0 1F 75 00 85 C0 75 08 83 C4 04 E9 E5 F5 F2 FF 59
 | `0x020E15` | `E8 E6 59 08 00` | `E8 32 4F 15 00` | Supercop pedal |
 | `0x0BBDC5` | `8B 44 24 64 50 50` | `E8 0D A1 0B 00 90` | Direct3D device error |
 | `0x0BBE56` | `33 C0 8B 4C 24 54` | `E9 86 A0 0B 00 90` | no Direct3D device |
-| `0x0C9EF7` | `6A 00 50 FF 51 18` | `50 E8 13 28 0C 00` | palette entries |
+| `0x0C9EF7` | `6A 00 50 FF 51 18` | `50 E8 18 28 0C 00` | palette entries |
 | `0x000248` | `08 44 1C 00` | `00 50 1C 00` | data section size |
 | `0x0001F8` | `4A 44 17 00` | `00 50 17 00` | code section size |
 | `0x000220` | `64 64 01 00` | `00 70 01 00` | .rdata section size |
@@ -1576,7 +1610,7 @@ C9 63 89 CA D1 EA 85 C0 79 02 F7 DA 01 D0 99 F7 F9 C3 56 57 89 C6 83 EC
 00 E8 2F 00 00 00 74 19 89 F0 BF B7 5F 57 00 E8 21 00 00 00 74 0B 31 C0
 EB 0A B8 01 00 00 00 EB 03 83 C8 FF 83 C4 40 5F 5E C3 E8 06 00 00 00 75
 03 80 38 00 C3 57 8A 0F 84 C9 74 17 8A 28 80 FD 61 72 08 80 FD 7A 77 03
-80 ED 20 38 CD 75 04 40 47 EB E3 5F C3 E9 08 6F 01 00 90 90 90 90 90 90
+80 ED 20 38 CD 75 04 40 47 EB E3 5F C3 E9 0D 6F 01 00 90 90 90 90 90 90
 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90
 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90
 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90
@@ -1597,7 +1631,7 @@ E8 C9 FF FF FF D9 C0 D8 4C 24 04 D9 5C 24 04 D9 C0 D8 4C 24 08 D9 5C 24
 00 00 00 68 BE 5C 4A 00 C3 51 B8 80 96 4F 00 FF D0 59 31 C0 89 01 89 41
 04 89 41 08 C3 B9 30 1F 75 00 EB 05 B9 34 1F 75 00 D8 01 D9 C0 B8 24 85
 55 00 FF D0 50 DA 24 24 58 D9 19 C3 51 B9 3C 1F 75 00 E8 E2 FF FF FF 59
-C3 E9 7D 6C 01 00 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90
+C3 E9 82 6C 01 00 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90
 90 90 90 90 8B 44 24 5C 83 78 0C 20 74 19 FF 74 24 08 FF 74 24 08 E8 25
 27 F5 FF 83 C4 08 66 89 07 83 C7 02 C2 08 00 FF 74 24 04 E8 40 24 F5 FF
 83 C4 04 89 07 83 C7 04 C2 08 00 FF 74 24 04 B8 70 31 40 00 FF D0 60 8B
@@ -1645,7 +1679,7 @@ DF 2D 00 1F 75 00 DE E9 D8 71 04 D8 1D 13 5F 57 00 DF E0 9E 73 11 A1 00
 1F 75 00 59 E8 67 08 F3 FF B9 B0 28 71 00 E8 5D 09 F3 FF D8 05 94 1F 75
 00 D8 15 07 5F 57 00 DF E0 9E 0F 93 05 90 1F 75 00 72 15 D8 25 07 5F 57
 00 D8 15 07 5F 57 00 DF E0 9E 72 04 DD D8 D9 EE D9 1D 94 1F 75 00 C3 E9
-16 69 01 00 90 90 90 90 90 A1 B0 1F 75 00 50 50 E8 A3 53 F4 FF 59 50 68
+1B 69 01 00 90 90 90 90 90 A1 B0 1F 75 00 50 50 E8 A3 53 F4 FF 59 50 68
 FD 00 00 00 68 A8 21 5B 00 68 38 22 5B 00 E8 4D E2 F4 FF 00 00 C8 41 0A
 D7 23 3D 00 00 80 37 0A D7 23 3C 89 88 88 3B 00 00 10 40 00 00 00 3F 00
 00 40 40 00 00 C8 41 55 53 45 52 33 32 2E 44 4C 4C 00 45 6E 75 6D 44 69
@@ -1683,40 +1717,55 @@ A8 00 00 00 89 B4 24 AC 00 00 00 89 94 24 B0 00 00 00 89 8C 24 B4 00 00
 24 B4 00 00 00 E8 22 00 00 00 85 C0 0F 84 06 FF FF FF 8B 9C 24 B0 00 00
 00 8B AC 24 B4 00 00 00 81 C4 BC 00 00 00 BE C0 5F 57 00 C3 53 56 57 81
 EC 80 00 00 00 89 E7 B9 20 00 00 00 31 C0 F3 AB 8D 44 24 6C 6A 00 50 6A
-00 FF 15 08 60 57 00 85 C0 0F 85 A4 00 00 00 8B 5C 24 6C 6A 08 6A 00 53
+00 FF 15 08 60 57 00 85 C0 0F 85 A9 00 00 00 8B 5C 24 6C 6A 08 6A 00 53
 8B 03 FF 50 50 C7 04 24 6C 00 00 00 C7 44 24 04 07 00 00 00 8B 84 24 94
 00 00 00 89 44 24 08 8B 84 24 90 00 00 00 89 44 24 0C C7 44 24 68 40 60
-00 00 6A 00 8D 44 24 74 50 8D 44 24 08 50 53 8B 03 FF 50 18 85 C0 75 4D
-8D 44 24 74 50 68 50 8D 57 00 53 8B 03 FF 10 85 C0 75 30 8B 74 24 74 8D
-44 24 78 50 FF 74 24 74 68 CB C6 58 00 56 8B 06 FF 50 20 85 C0 75 0E FF
-44 24 7C 8B 4C 24 78 51 8B 01 FF 50 08 56 8B 06 FF 50 08 8B 4C 24 70 51
-8B 01 FF 50 08 53 8B 03 FF 50 08 8B 44 24 7C 81 C4 80 00 00 00 5F 5E 5B
-C2 08 00 E0 3D E6 84 AA 46 CF 11 81 6F 00 00 C0 20 15 6E A1 9C 37 5B 00
-8D 04 85 01 00 00 00 31 D2 B9 03 00 00 00 F7 F1 A3 38 1F 75 00 FF 15 AC
-60 57 00 8B 15 A0 37 5B 00 83 FA 10 75 09 3C 06 72 05 BA 20 00 00 00 C3
-53 56 57 55 89 E5 81 EC 00 04 00 00 8B 5D 14 FF 75 20 FF 75 1C FF 75 18
-6A 00 53 8B 03 FF 50 18 3D 05 40 00 80 75 3A 89 E7 57 FF 75 1C FF 75 18
-6A 00 53 8B 03 FF 50 10 85 C0 75 20 8B 75 20 8B 4D 1C E3 14 8B 06 33 07
-25 FF FF FF 00 75 0D 83 C6 04 83 C7 04 49 75 EC 31 C0 EB 05 B8 05 40 00
-80 89 EC 5D 5F 5E 5B C2 10 00 56 8B 74 24 0C C7 05 B4 1F 75 00 10 00 00
-00 80 3D B8 1F 75 00 00 75 31 FF 15 AC 60 57 00 3C 06 72 27 C7 46 18 18
-00 00 00 E8 31 00 00 00 85 C0 74 20 C7 46 18 20 00 00 00 E8 21 00 00 00
-85 C0 74 10 C7 46 18 10 00 00 00 E8 11 00 00 00 5E C2 10 00 8B 4E 18 89
-0D B4 1F 75 00 5E C2 10 00 FF 74 24 18 FF 74 24 18 FF 74 24 18 FF 74 24
-18 8B 04 24 8B 08 FF 51 18 C3 A3 B0 1F 75 00 3D EA 02 76 88 0F 85 ED 00
-00 00 83 3D B4 1F 75 00 10 0F 86 E0 00 00 00 8B 8E 70 02 00 00 8B 15 AC
-08 74 00 85 C9 74 16 8B 15 B0 08 74 00 49 74 0D 8B 15 90 08 74 00 49 0F
-85 BA 00 00 00 52 50 50 E8 53 EA F2 FF 83 C4 04 50 68 FD 00 00 00 68 A8
-21 5B 00 68 38 22 5B 00 E8 4B 77 F3 FF 83 C4 14 68 F4 C8 58 00 E8 3E 77
-F3 FF 83 C4 04 5A FF 35 74 B7 73 00 6A 00 52 8B 02 FF 50 20 8B 0D 74 B7
-73 00 51 8B 01 FF 50 08 83 25 74 B7 73 00 00 83 25 7C B7 73 00 00 C6 05
-B8 1F 75 00 01 FF 35 9C 37 5B 00 FF 35 98 37 5B 00 6A 10 FF B6 70 02 00
-00 E8 62 3D F3 FF 83 C4 10 83 EC 10 A1 40 8D 57 00 89 04 24 A1 44 8D 57
-00 89 44 24 04 A1 48 8D 57 00 89 44 24 08 A1 4C 8D 57 00 89 44 24 0C 89
-F1 E8 72 F3 F2 FF A3 B0 1F 75 00 85 C0 75 08 83 C4 04 E9 E5 F5 F2 FF 59
-50 50 FF E1 68 61 72 64 77 61 72 65 20 64 65 76 69 63 65 20 61 67 61 69
-6E 2C 20 77 69 74 68 20 61 20 31 36 2D 62 69 74 20 7A 2D 62 75 66 66 65
-72 0A 00 00
+00 00 6A 00 8D 44 24 74 50 8D 44 24 08 50 53 8B 03 FF 50 18 85 C0 75 52
+8D 44 24 74 50 68 50 8D 57 00 53 8B 03 FF 10 85 C0 75 35 E8 2E 03 00 00
+8B 74 24 74 8D 44 24 78 50 FF 74 24 74 68 D0 C6 58 00 56 8B 06 FF 50 20
+85 C0 75 0E FF 44 24 7C 8B 4C 24 78 51 8B 01 FF 50 08 56 8B 06 FF 50 08
+8B 4C 24 70 51 8B 01 FF 50 08 53 8B 03 FF 50 08 8B 44 24 7C 81 C4 80 00
+00 00 5F 5E 5B C2 08 00 E0 3D E6 84 AA 46 CF 11 81 6F 00 00 C0 20 15 6E
+A1 9C 37 5B 00 8D 04 85 01 00 00 00 31 D2 B9 03 00 00 00 F7 F1 A3 38 1F
+75 00 FF 15 AC 60 57 00 8B 15 A0 37 5B 00 83 FA 10 75 09 3C 06 72 05 BA
+20 00 00 00 C3 53 56 57 55 89 E5 81 EC 00 04 00 00 8B 5D 14 FF 75 20 FF
+75 1C FF 75 18 6A 00 53 8B 03 FF 50 18 3D 05 40 00 80 75 3A 89 E7 57 FF
+75 1C FF 75 18 6A 00 53 8B 03 FF 50 10 85 C0 75 20 8B 75 20 8B 4D 1C E3
+14 8B 06 33 07 25 FF FF FF 00 75 0D 83 C6 04 83 C7 04 49 75 EC 31 C0 EB
+05 B8 05 40 00 80 89 EC 5D 5F 5E 5B C2 10 00 56 8B 74 24 0C C7 05 B4 1F
+75 00 10 00 00 00 80 3D B8 1F 75 00 00 75 31 FF 15 AC 60 57 00 3C 06 72
+27 C7 46 18 18 00 00 00 E8 31 00 00 00 85 C0 74 20 C7 46 18 20 00 00 00
+E8 21 00 00 00 85 C0 74 10 C7 46 18 10 00 00 00 E8 11 00 00 00 5E C2 10
+00 8B 4E 18 89 0D B4 1F 75 00 5E C2 10 00 FF 74 24 18 FF 74 24 18 FF 74
+24 18 FF 74 24 18 8B 04 24 8B 08 FF 51 18 C3 A3 B0 1F 75 00 3D 82 00 76
+88 74 7F 3D EA 02 76 88 0F 85 32 01 00 00 83 3D B4 1F 75 00 10 0F 86 25
+01 00 00 8B 8E 70 02 00 00 8B 15 AC 08 74 00 85 C9 74 16 8B 15 B0 08 74
+00 49 74 0D 8B 15 90 08 74 00 49 0F 85 FF 00 00 00 52 50 50 E8 47 EA F2
+FF 83 C4 04 50 68 FD 00 00 00 68 A8 21 5B 00 68 38 22 5B 00 E8 3F 77 F3
+FF 83 C4 14 68 45 C9 58 00 E8 32 77 F3 FF 83 C4 04 5A FF 35 74 B7 73 00
+6A 00 52 8B 02 FF 50 20 EB 43 E8 27 01 00 00 85 C0 0F 84 B1 00 00 00 A1
+B0 1F 75 00 50 50 E8 F5 E9 F2 FF 83 C4 04 50 68 FD 00 00 00 68 A8 21 5B
+00 68 38 22 5B 00 E8 ED 76 F3 FF 83 C4 14 68 74 C9 58 00 E8 E0 76 F3 FF
+83 C4 04 EB 3D 8B 0D 74 B7 73 00 51 8B 01 FF 50 08 83 25 74 B7 73 00 00
+83 25 7C B7 73 00 00 C6 05 B8 1F 75 00 01 FF 35 9C 37 5B 00 FF 35 98 37
+5B 00 6A 10 FF B6 70 02 00 00 E8 11 3D F3 FF 83 C4 10 83 EC 10 A1 40 8D
+57 00 89 04 24 A1 44 8D 57 00 89 44 24 04 A1 48 8D 57 00 89 44 24 08 A1
+4C 8D 57 00 89 44 24 0C 89 F1 E8 21 F3 F2 FF A3 B0 1F 75 00 85 C0 75 08
+83 C4 04 E9 94 F5 F2 FF 59 50 50 FF E1 68 61 72 64 77 61 72 65 20 64 65
+76 69 63 65 20 61 67 61 69 6E 2C 20 77 69 74 68 20 61 20 31 36 2D 62 69
+74 20 7A 2D 62 75 66 66 65 72 0A 00 68 61 72 64 77 61 72 65 20 64 65 76
+69 63 65 20 61 67 61 69 6E 2C 20 77 69 74 68 20 74 68 65 20 32 30 34 38
+20 70 69 78 65 6C 20 6C 69 6D 69 74 20 72 65 6D 6F 76 65 64 0A 00 60 31
+ED 68 69 CA 58 00 FF 15 A0 60 57 00 85 C0 74 29 68 76 CA 58 00 50 FF 15
+FC 60 57 00 85 C0 74 19 A3 BC 1F 75 00 68 85 CA 58 00 E8 10 00 00 00 68
+8F CA 58 00 E8 06 00 00 00 89 6C 24 1C 61 C3 FF 74 24 04 FF 15 A0 60 57
+00 85 C0 74 69 89 C3 8B 73 3C 01 DE 8B 7E 2C 01 DF 8B 76 1C 83 FE 06 72
+55 80 3F B8 75 4C 81 7F 01 00 08 00 00 75 43 80 7F 05 39 75 3D 6A 00 89
+E0 50 6A 40 6A 04 8D 47 01 50 FF 15 BC 1F 75 00 85 C0 74 1D 83 4F 01 FF
+6A 00 89 E0 50 FF 74 24 08 6A 04 8D 47 01 50 FF 15 BC 1F 75 00 83 C4 04
+45 83 C4 04 83 C6 FB 83 C7 05 47 4E EB A6 C2 04 00 4B 45 52 4E 45 4C 33
+32 2E 44 4C 4C 00 56 69 72 74 75 61 6C 50 72 6F 74 65 63 74 00 44 33 44
+49 4D 2E 44 4C 4C 00 44 33 44 49 4D 37 30 30 2E 44 4C 4C 00
 """)
 if data[RDATA_OFFSET:RDATA_OFFSET + len(RDATA)] not in (bytes(len(RDATA)), RDATA):
     raise RuntimeError("Unexpected bytes where the .rdata code goes. Wrong executable version?")
@@ -1837,7 +1886,7 @@ for offset, old, new in [
     (0x020E15, "E8 E6 59 08 00", "E8 32 4F 15 00"),
     (0x0BBDC5, "8B 44 24 64 50 50", "E8 0D A1 0B 00 90"),
     (0x0BBE56, "33 C0 8B 4C 24 54", "E9 86 A0 0B 00 90"),
-    (0x0C9EF7, "6A 00 50 FF 51 18", "50 E8 13 28 0C 00"),
+    (0x0C9EF7, "6A 00 50 FF 51 18", "50 E8 18 28 0C 00"),
     (0x000248, "08 44 1C 00", "00 50 1C 00"),
     (0x0001F8, "4A 44 17 00", "00 50 17 00"),
     (0x000220, "64 64 01 00", "00 70 01 00"),

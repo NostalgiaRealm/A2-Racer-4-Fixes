@@ -161,6 +161,7 @@ TICK_BASE    equ 0x751fac               ; GetTickCount when the communicator fir
 HAL_ERROR    equ 0x751fb0               ; why Direct3D refused the hardware device
 Z_DEPTH      equ 0x751fb4               ; depth of the Z-buffer create_zbuffer made last
 Z_ONLY_16    equ 0x751fb8               ; byte, 1 once a deeper Z-buffer cost the hardware device
+VIRTUAL_PROTECT equ 0x751fbc            ; VirtualProtect, looked up by unlock_d3d
 
 MODE_COUNT    equ 9                     ; the current mode, the 16-bit and the 24-bit entries
 
@@ -1525,6 +1526,7 @@ probe:
     call [eax]                          ; QueryInterface
     test eax, eax
     jnz .release_surface
+    call unlock_d3d                     ; ddraw has loaded its Direct3D module now
     mov esi, [esp+P_D3D]
     lea eax, [esp+P_DEVICE]
     push eax
@@ -1711,9 +1713,12 @@ create_zbuffer_deeper:
 ; Anything else goes on as before: keep the error, and push it twice as the game pushed the
 ; focus, once as room on the stack and once for its text.
 D3DERR_ZBUFF_NEEDS_VIDEOMEMORY equ 0x887602ea
+DDERR_INVALIDOBJECT equ 0x88760082
 
 hal_refused:
     mov [HAL_ERROR], eax
+    cmp eax, DDERR_INVALIDOBJECT
+    je .unlock
     cmp eax, D3DERR_ZBUFF_NEEDS_VIDEOMEMORY
     jne .as_before
     cmp dword [Z_DEPTH], 16
@@ -1749,6 +1754,31 @@ hal_refused:
     push edx
     mov eax, [edx]
     call [eax+0x20]                     ; IDirectDrawSurface::DeleteAttachedSurface
+    jmp .new_zbuffer
+.unlock:
+    ; "Pointer is not a dd object" is what Direct3D says for a render target wider or
+    ; taller than 2048 pixels. The probe at startup unlocked that already, so this only
+    ; happens when ddraw loaded its Direct3D module again since; unlock it again, and
+    ; ask once more when that found the check.
+    call unlock_d3d
+    test eax, eax
+    jz .as_before
+    mov eax, [HAL_ERROR]
+    push eax
+    push eax
+    call ERROR_TEXT
+    add esp, 4
+    push eax
+    push 253
+    push D3DEV_FILE
+    push HAL_ERROR_FORMAT
+    call GAME_LOG
+    add esp, 20
+    push unlock_text
+    call GAME_LOG
+    add esp, 4
+    jmp .device_again
+.new_zbuffer:
     mov ecx, [Z_SURFACE]
     push ecx
     mov eax, [ecx]
@@ -1762,6 +1792,7 @@ hal_refused:
     push dword [esi+0x270]
     call MAKE_ZBUFFER                   ; stops with the game's own error if it can't
     add esp, 16
+.device_again:
     sub esp, 16                         ; the GUID, by value
     mov eax, [HAL_GUID]
     mov [esp], eax
@@ -1785,6 +1816,99 @@ hal_refused:
     jmp ecx
 
 retry_text: db "hardware device again, with a 16-bit z-buffer", 10, 0
+unlock_text: db "hardware device again, with the 2048 pixel limit removed", 10, 0
+
+; Windows 10 and 11 refuse a Direct3D 1 to 7 render target wider or taller than 2048 pixels
+; with DDERR_INVALIDOBJECT, in d3dim.dll for IDirect3D to IDirect3D3 and in d3dim700.dll
+; for IDirect3D7: each compares the width and the height with a constant 2048 where the
+; device is created, in "mov eax, 2048 / cmp [width], eax / ja refuse / cmp [height], eax
+; / ja refuse", and once more in a second place. Nothing documents why; the 3D device has
+; no such limit itself, and Wine has none. This finds every "mov eax, 2048" followed by a
+; cmp in the code of either module, when it is loaded, and makes it "mov eax, -1", which no
+; width or height is above, as LegacyD3DResolutionHack and dxwrapper do. Returns in eax how
+; many places it changed. Keeps every other register.
+UNLOCK_PATTERN_LEN  equ 6               ; B8 00 08 00 00 39
+PAGE_EXECUTE_READWRITE equ 0x40
+
+unlock_d3d:
+    pushad
+    xor ebp, ebp                        ; how many places changed
+    push kernel32_name
+    call [GetModuleHandleA]
+    test eax, eax
+    jz .done
+    push virtual_protect_name
+    push eax
+    call [GetProcAddress]
+    test eax, eax
+    jz .done
+    mov [VIRTUAL_PROTECT], eax
+    push d3dim_name
+    call .module
+    push d3dim700_name
+    call .module
+.done:
+    mov [esp+28], ebp                   ; returns the count in eax
+    popad
+    ret
+
+; Unlocks one module, by the name on the stack, when it is loaded.
+.module:
+    push dword [esp+4]
+    call [GetModuleHandleA]
+    test eax, eax
+    jz .module_done
+    mov ebx, eax
+    mov esi, [ebx+0x3c]                 ; e_lfanew
+    add esi, ebx                        ; IMAGE_NT_HEADERS
+    mov edi, [esi+0x2c]                 ; BaseOfCode
+    add edi, ebx
+    mov esi, [esi+0x1c]                 ; SizeOfCode, the bytes left; ecx wouldn't survive the calls
+.scan:
+    cmp esi, UNLOCK_PATTERN_LEN
+    jb .module_done
+    cmp byte [edi], 0xb8                ; mov eax, imm32
+    jne .next
+    cmp dword [edi+1], 2048
+    jne .next
+    cmp byte [edi+5], 0x39              ; cmp r/m32, eax
+    jne .next
+    push 0                              ; the old protection
+    mov eax, esp
+    push eax
+    push PAGE_EXECUTE_READWRITE
+    push 4
+    lea eax, [edi+1]
+    push eax
+    call [VIRTUAL_PROTECT]
+    test eax, eax
+    jz .no_access
+    or dword [edi+1], -1
+    push 0
+    mov eax, esp
+    push eax
+    push dword [esp+8]                  ; the old protection back
+    push 4
+    lea eax, [edi+1]
+    push eax
+    call [VIRTUAL_PROTECT]
+    add esp, 4
+    inc ebp
+.no_access:
+    add esp, 4
+    add esi, -UNLOCK_PATTERN_LEN+1      ; past this place
+    add edi, UNLOCK_PATTERN_LEN-1
+.next:
+    inc edi
+    dec esi
+    jmp .scan
+.module_done:
+    ret 4
+
+kernel32_name:        db "KERNEL32.DLL", 0
+virtual_protect_name: db "VirtualProtect", 0
+d3dim_name:           db "D3DIM.DLL", 0
+d3dim700_name:        db "D3DIM700.DLL", 0
 
 ; ---------------------------------------------------------------------------------------
 ; Third part: the redirected call in the SetEntries wrapper, at VA 0x4C9EF7, file 0xC9EF7.
